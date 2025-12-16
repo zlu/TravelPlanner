@@ -1,4 +1,6 @@
 import re, string, os, sys
+from dotenv import load_dotenv
+load_dotenv()
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "tools/planner")))
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "../tools/planner")))
@@ -7,8 +9,8 @@ import importlib
 from typing import List, Dict, Any
 import tiktoken
 from pandas import DataFrame
-from langchain.chat_models import ChatOpenAI
-from langchain.callbacks import get_openai_callback
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.callbacks import get_openai_callback
 from langchain.llms.base import BaseLLM
 from langchain.prompts import PromptTemplate
 from langchain.schema import (
@@ -30,8 +32,8 @@ import argparse
 from datasets import load_dataset
 import os
 
-OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
-GOOGLE_API_KEY = os.environ['GOOGLE_API_KEY']
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 
 
 pd.options.display.max_info_columns = 200
@@ -139,6 +141,8 @@ class ReactAgent:
                      model_kwargs={"stop": stop_list})
         
         elif react_llm_name in ['gemini']:
+            if not GOOGLE_API_KEY:
+                raise ValueError("GOOGLE_API_KEY is required when using 'gemini' model. Please set it in your .env file.")
             self.llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
             self.max_token_length = 30000
 
