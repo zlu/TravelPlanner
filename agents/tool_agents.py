@@ -7,8 +7,8 @@ import importlib
 from typing import List, Dict, Any
 import tiktoken
 from pandas import DataFrame
-from langchain.chat_models import ChatOpenAI
-from langchain.callbacks import get_openai_callback
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.callbacks import get_openai_callback
 from langchain.llms.base import BaseLLM
 from langchain.prompts import PromptTemplate
 from langchain.schema import (
