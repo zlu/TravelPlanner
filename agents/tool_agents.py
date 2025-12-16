@@ -9,7 +9,7 @@ import importlib
 from typing import List, Dict, Any
 import tiktoken
 from pandas import DataFrame
-from langchain_community.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI, ChatOllama
 from langchain_community.callbacks import get_openai_callback
 from langchain.llms.base import BaseLLM
 from langchain.prompts import PromptTemplate
@@ -91,7 +91,16 @@ class ReactAgent:
         self.current_observation = ''
         self.current_data = None
 
-        if 'gpt-3.5' in react_llm_name:
+        if react_llm_name.startswith('ollama:'):
+            # Use a local Ollama model via LangChain's ChatOllama wrapper.
+            # Example: --model_name ollama:llama3
+            ollama_model = react_llm_name.split(":", 1)[1] or "llama3"
+            self.max_token_length = 30000
+            self.llm = ChatOllama(
+                model=ollama_model,
+                temperature=0,
+            )
+        elif 'gpt-3.5' in react_llm_name:
             stop_list = ['\n']
             self.max_token_length = 15000
             self.llm = ChatOpenAI(temperature=1,
