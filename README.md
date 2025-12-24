@@ -59,11 +59,13 @@ Based on the collected information, language agents are expected to deliver a pl
 
 ```bash
 export OUTPUT_DIR=path/to/your/output/file
-# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral']
+# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral','deepseek-chat','deepseek-coder']
 export MODEL_NAME=MODEL_NAME
 export OPENAI_API_KEY=YOUR_OPENAI_KEY
 # if you do not want to test google models, like gemini, just input "1".
 export GOOGLE_API_KEY=YOUR_GOOGLE_KEY
+# For DeepSeek models, set DEEPSEEK_API_KEY
+export DEEPSEEK_API_KEY=YOUR_DEEPSEEK_KEY
 # SET_TYPE in ['validation', 'test']
 export SET_TYPE=validation
 cd agents
@@ -80,11 +82,13 @@ Please refer to the paper for more details.
 
 ```bash
 export OUTPUT_DIR=path/to/your/output/file
-# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral']
+# We support MODEL in ['gpt-3.5-turbo-X','gpt-4-1106-preview','gemini','mistral-7B-32K','mixtral','deepseek-chat','deepseek-coder']
 export MODEL_NAME=MODEL_NAME
 export OPENAI_API_KEY=YOUR_OPENAI_KEY
 # if you do not want to test google models, like gemini, just input "1".
 export GOOGLE_API_KEY=YOUR_GOOGLE_KEY
+# For DeepSeek models, set DEEPSEEK_API_KEY
+export DEEPSEEK_API_KEY=YOUR_DEEPSEEK_KEY
 # SET_TYPE in ['validation', 'test']
 export SET_TYPE=validation
 # STRATEGY in ['direct','cot','react','reflexion']
@@ -102,6 +106,8 @@ In order to parse natural language plans, we use gpt-4 to convert these plans in
 export OUTPUT_DIR=path/to/your/output/file
 export MODEL_NAME=MODEL_NAME
 export OPENAI_API_KEY=YOUR_OPENAI_KEY
+# For DeepSeek models, set DEEPSEEK_API_KEY
+export DEEPSEEK_API_KEY=YOUR_DEEPSEEK_KEY
 export SET_TYPE=validation
 export STRATEGY=direct
 # MODE in ['two-stage','sole-planning']

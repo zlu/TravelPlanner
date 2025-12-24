@@ -25,6 +25,7 @@ import argparse
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 
 
 def catch_openai_api_error():
@@ -94,6 +95,18 @@ class Planner:
             if not GOOGLE_API_KEY:
                 raise ValueError("GOOGLE_API_KEY is required when using 'gemini' model. Please set it in your .env file.")
             self.llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
+        elif model_name.startswith('deepseek:') or model_name.startswith('deepseek-'):
+            # DeepSeek models use OpenAI-compatible API
+            deepseek_model = model_name.replace('deepseek:', '') if ':' in model_name else model_name
+            if not DEEPSEEK_API_KEY:
+                raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek models. Please set it in your .env file.")
+            self.llm = ChatOpenAI(
+                model_name=deepseek_model,
+                temperature=0,
+                max_tokens=4096,
+                openai_api_key=DEEPSEEK_API_KEY,
+                openai_api_base="https://api.deepseek.com/v1"
+            )
         else:
             if not OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY is required when using OpenAI models. Please set it in your .env file.")
@@ -143,6 +156,19 @@ class ReactPlanner:
             self.react_llm = ChatOllama(
                 model=ollama_model,
                 temperature=0,
+            )
+        elif model_name.startswith('deepseek:') or model_name.startswith('deepseek-'):
+            # DeepSeek models use OpenAI-compatible API
+            deepseek_model = model_name.replace('deepseek:', '') if ':' in model_name else model_name
+            if not DEEPSEEK_API_KEY:
+                raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek models. Please set it in your .env file.")
+            self.react_llm = ChatOpenAI(
+                model_name=deepseek_model,
+                temperature=0,
+                max_tokens=1024,
+                openai_api_key=DEEPSEEK_API_KEY,
+                openai_api_base="https://api.deepseek.com/v1",
+                model_kwargs={"stop": ["Action", "Thought", "Observation"]},
             )
         else:
             self.react_llm = ChatOpenAI(
@@ -274,6 +300,27 @@ class ReactReflectPlanner:
                 raise ValueError("GOOGLE_API_KEY is required when using 'gemini' model. Please set it in your .env file.")
             self.react_llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
             self.reflect_llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
+        elif model_name.startswith('deepseek:') or model_name.startswith('deepseek-'):
+            # DeepSeek models use OpenAI-compatible API
+            deepseek_model = model_name.replace('deepseek:', '') if ':' in model_name else model_name
+            if not DEEPSEEK_API_KEY:
+                raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek models. Please set it in your .env file.")
+            self.react_llm = ChatOpenAI(
+                model_name=deepseek_model,
+                temperature=0,
+                max_tokens=1024,
+                openai_api_key=DEEPSEEK_API_KEY,
+                openai_api_base="https://api.deepseek.com/v1",
+                model_kwargs={"stop": ["Action","Thought","Observation,'\n"]}
+            )
+            self.reflect_llm = ChatOpenAI(
+                model_name=deepseek_model,
+                temperature=0,
+                max_tokens=1024,
+                openai_api_key=DEEPSEEK_API_KEY,
+                openai_api_base="https://api.deepseek.com/v1",
+                model_kwargs={"stop": ["Action","Thought","Observation,'\n"]}
+            )
         else:
             if not OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY is required when using OpenAI models. Please set it in your .env file.")

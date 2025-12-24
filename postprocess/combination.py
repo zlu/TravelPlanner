@@ -21,12 +21,13 @@ if __name__ == '__main__':
     elif args.mode == 'sole-planning':
         suffix = f'_{args.strategy}'
 
+    # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if args.set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train')['train']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','train', download_mode='reuse_cache_if_exists')['train']
     elif args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
     elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','test', download_mode='reuse_cache_if_exists')['test']
 
     idx_number_list = [i for i in range(1,len(query_data_list)+1)]
 

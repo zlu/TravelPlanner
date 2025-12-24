@@ -113,10 +113,11 @@ if __name__ == '__main__':
     parser.add_argument("--set_type", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="./")
     args = parser.parse_args()
+    # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
     elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','test', download_mode='reuse_cache_if_exists')['test']
     for idx, query in enumerate(tqdm(query_data_list)):
         plan_list = [{'finished':[False,set()]}]
         restaurant_list = []

@@ -18,6 +18,8 @@ KEY_INDEX = 0
 KEY_POOL =  [
    os.environ.get('OPENAI_API_KEY')
 ]# your key pool
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 if not KEY_POOL[0]:
     raise ValueError("OPENAI_API_KEY is required. Please set it in your .env file.")
 openai.api_key = KEY_POOL[0]
@@ -185,13 +187,26 @@ def prompt_chatgpt(system_input, user_input, temperature,save_path,index,history
                           {"role": "assistant", "content": "xxx"}]
     return: assistant_output, (updated) history, money cost
     '''
+    # Check if using DeepSeek model
+    is_deepseek = model_name.startswith('deepseek:') or model_name.startswith('deepseek-')
+    deepseek_model = model_name
+    if is_deepseek:
+        if not DEEPSEEK_API_KEY:
+            raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek models. Please set it in your .env file.")
+        deepseek_model = model_name.replace('deepseek:', '') if ':' in model_name else model_name
+        # Temporarily set DeepSeek API key and base
+        original_key = openai.api_key
+        original_base = getattr(openai, 'api_base', None)
+        openai.api_key = DEEPSEEK_API_KEY
+        openai.api_base = DEEPSEEK_API_BASE
+    
     if len(history) == 0:
         history = [{"role": "system", "content": system_input}]
     history.append({"role": "user", "content": user_input})
     while True:
         try:
             completion = limited_execution_time(openai.ChatCompletion.create,
-                model=model_name,
+                model=deepseek_model if is_deepseek else model_name,
                 prompt=history,
                 temp=temperature)
             if completion is None:
@@ -200,6 +215,15 @@ def prompt_chatgpt(system_input, user_input, temperature,save_path,index,history
         except:
             catch_openai_api_error(user_input)
             time.sleep(1)
+    
+    # Restore original API key and base if using DeepSeek
+    if is_deepseek:
+        openai.api_key = original_key
+        if original_base:
+            openai.api_base = original_base
+        else:
+            if hasattr(openai, 'api_base'):
+                delattr(openai, 'api_base')
 
     assistant_output = completion['choices'][0]['message']['content']
     history.append({"role": "assistant", "content": assistant_output})
@@ -273,12 +297,13 @@ def build_plan_format_conversion_prompt(directory, set_type='validation',model_n
     }}]
 -----EXAMPLE END-----
 """
+    # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train')['train']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','train', download_mode='reuse_cache_if_exists')['train']
     elif set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
     elif set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','test', download_mode='reuse_cache_if_exists')['test']
 
     idx_number_list = [i for i in range(1,len(query_data_list)+1)]
     if mode == 'two-stage':

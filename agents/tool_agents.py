@@ -34,6 +34,7 @@ import os
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 
 
 pd.options.display.max_info_columns = 200
@@ -154,6 +155,21 @@ class ReactAgent:
                 raise ValueError("GOOGLE_API_KEY is required when using 'gemini' model. Please set it in your .env file.")
             self.llm = ChatGoogleGenerativeAI(temperature=0,model="gemini-pro",google_api_key=GOOGLE_API_KEY)
             self.max_token_length = 30000
+        elif react_llm_name.startswith('deepseek:') or react_llm_name.startswith('deepseek-'):
+            # DeepSeek models use OpenAI-compatible API
+            deepseek_model = react_llm_name.replace('deepseek:', '') if ':' in react_llm_name else react_llm_name
+            if not DEEPSEEK_API_KEY:
+                raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek models. Please set it in your .env file.")
+            stop_list = ['\n']
+            self.max_token_length = 30000
+            self.llm = ChatOpenAI(
+                temperature=0,
+                max_tokens=256,
+                model_name=deepseek_model,
+                openai_api_key=DEEPSEEK_API_KEY,
+                openai_api_base="https://api.deepseek.com/v1",
+                model_kwargs={"stop": stop_list}
+            )
 
 
         self.illegal_early_stop_patience = illegal_early_stop_patience
@@ -654,10 +670,11 @@ if __name__ == '__main__':
     parser.add_argument("--model_name", type=str, default="gpt-3.5-turbo-1106")
     parser.add_argument("--output_dir", type=str, default="./")
     args = parser.parse_args()
+    # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if args.set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation')['validation']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
     elif args.set_type == 'test':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','test')['test']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','test', download_mode='reuse_cache_if_exists')['test']
     numbers = [i for i in range(1,len(query_data_list)+1)]
     agent = ReactAgent(None, tools=tools_list,max_steps=30,react_llm_name=args.model_name,planner_llm_name=args.model_name)
     with get_openai_callback() as cb:
