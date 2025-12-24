@@ -20,3 +20,6 @@ train_*.txt
 train_*.jsonl
 
 research/**
+
+WORK_SUMMARY.md
+work_summary.pdf
