@@ -23,3 +23,11 @@ research/**
 
 WORK_SUMMARY.md
 work_summary.pdf
+
+5-query-results.txt
+smt_output/**
+smt_aggregate_results.jsonl
+smt_padded.jsonl
+
+eval_result.txt
+validation_queries.json

@@ -9,3 +9,4 @@ datasets>=4.0.0
 func_timeout==4.3.5
 python-dotenv
 ollama
+z3-solver
