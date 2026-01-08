@@ -109,8 +109,10 @@ def _shim_optional_dependencies():
                 self.content = content
         sys.modules["mistralai.models.chat_completion"] = types.SimpleNamespace(ChatMessage=FakeChatMessage)
 
-    # Shim tiktoken if missing (used only for encoding length; return dummy encoder).
-    if "tiktoken" not in sys.modules:
+    # Shim tiktoken only if it's truly unavailable.
+    try:
+        import tiktoken  # noqa: F401
+    except ImportError:
         class _DummyEncoder:
             def encode(self, text):
                 return list(text.encode("utf-8"))
@@ -357,6 +359,7 @@ def run_smt(
     max_items: Optional[int] = None,
     smt_repo: Optional[Path] = None,
     dataset_path: Optional[Path] = None,
+    output_root: Optional[Path] = None,
     skip_existing: bool = True,
     start_idx: int = 1,
 ):
@@ -391,6 +394,15 @@ def run_smt(
 
     dataset = _load_queries(set_type, dataset_path)
 
+    repo_root_path = Path(__file__).resolve().parents[1]
+    output_base = (
+        Path(output_root)
+        if output_root is not None
+        else repo_root_path / "smt_output"
+    )
+    if not output_base.is_absolute():
+        output_base = (repo_root_path / output_base).resolve()
+
     # Monkeypatch pipeline to handle arbitrary step formatting more robustly.
     def patched_pipeline(query, mode, model, index, model_version=None):
         import json
@@ -405,7 +417,7 @@ def run_smt(
         from tools.accommodations.apis import Accommodations
         from tools.restaurants.apis import Restaurants
 
-        output_root = Path(__file__).resolve().parents[1] / "smt_output" / mode / "gpt_nl" / str(index)
+        output_root = output_base / mode / "gpt_nl" / str(index)
         os.makedirs(output_root / "codes", exist_ok=True)
         os.makedirs(output_root / "plans", exist_ok=True)
 
@@ -454,6 +466,8 @@ def run_smt(
         variables = {}
         times = []
         codes = "from z3 import *\n\n"
+        success = False
+        path = str(output_root) + "/"
 
         try:
             if model == "gpt":
@@ -633,14 +647,20 @@ def run_smt(
                 with open(output_root / "codes" / "codes.txt", "w") as f:
                     f.write(codes)
                 # Execute with the upstream module's namespace so helper fns (e.g., get_arrivals_list) are in scope.
-                from func_timeout import func_timeout, FunctionTimedOut
-                exec_timeout = float(os.getenv("EXEC_TIMEOUT", "120"))
-                def _run_exec():
-                    exec(codes, module.__dict__, locals())
-                try:
-                    func_timeout(exec_timeout, _run_exec)
-                except FunctionTimedOut:
-                    raise TimeoutError(f"Execution timed out after {exec_timeout}s")
+                module.__dict__.update({
+                    "CitySearch": CitySearch,
+                    "FlightSearch": FlightSearch,
+                    "AttractionSearch": AttractionSearch,
+                    "DistanceSearch": DistanceSearch,
+                    "AccommodationSearch": AccommodationSearch,
+                    "RestaurantSearch": RestaurantSearch,
+                    "s": s,
+                    "variables": variables,
+                    "query_json": query_json,
+                    "path": path,
+                    "success": success,
+                })
+                exec(codes, module.__dict__)
             except Exception as exec_err:
                 # If combined code failed, fall back to per-section generation once.
                 if combined_used:
@@ -649,14 +669,20 @@ def run_smt(
                     # Persist fallback code and retry with timeout.
                     with open(output_root / "codes" / "codes.txt", "w") as f:
                         f.write(codes)
-                    from func_timeout import func_timeout, FunctionTimedOut
-                    exec_timeout = float(os.getenv("EXEC_TIMEOUT", "120"))
-                    def _run_exec():
-                        exec(codes, module.__dict__, locals())
-                    try:
-                        func_timeout(exec_timeout, _run_exec)
-                    except FunctionTimedOut:
-                        raise TimeoutError(f"Execution timed out after {exec_timeout}s")
+                    module.__dict__.update({
+                        "CitySearch": CitySearch,
+                        "FlightSearch": FlightSearch,
+                        "AttractionSearch": AttractionSearch,
+                        "DistanceSearch": DistanceSearch,
+                        "AccommodationSearch": AccommodationSearch,
+                        "RestaurantSearch": RestaurantSearch,
+                        "s": s,
+                        "variables": variables,
+                        "query_json": query_json,
+                        "path": path,
+                        "success": success,
+                    })
+                    exec(codes, module.__dict__)
                 else:
                     raise exec_err
             times.append(time.time() - start)
@@ -672,8 +698,8 @@ def run_smt(
             # If no plan was produced, log it.
             plan_file = output_root / "plans" / "plan.txt"
             if not plan_file.exists():
-                with open(output_root / "plans" / "error.txt", "w") as f:
-                    f.write("No plan generated (unsat or execution failed).")
+                with open(output_root / "plans" / "error.txt", "a") as f:
+                    f.write("\nNo plan generated (unsat or execution failed).")
 
     module.pipeline = patched_pipeline
 
@@ -692,7 +718,7 @@ def run_smt(
         # Ensure relative file reads (prompts/*) work by running inside the SMT repo.
         os.chdir(repo_root)
         for idx in range(start_idx - 1, end_idx):
-            out_dir = Path(__file__).resolve().parents[1] / "smt_output" / set_type / "gpt_nl" / str(idx + 1) / "plans" / "plan.txt"
+            out_dir = output_base / set_type / "gpt_nl" / str(idx + 1) / "plans" / "plan.txt"
             if skip_existing and out_dir.exists():
                 continue
             query = dataset[idx]["query"]
@@ -729,6 +755,12 @@ def main():
         help="Local json/jsonl file with queries (optional). If omitted, tries to load osunlp/TravelPlanner from HF.",
     )
     parser.add_argument(
+        "--output_root",
+        type=Path,
+        default=None,
+        help="Base output directory (defaults to ./smt_output).",
+    )
+    parser.add_argument(
         "--start_idx",
         type=int,
         default=1,
@@ -747,6 +779,7 @@ def main():
         args.max_items,
         args.smt_repo,
         args.dataset_path,
+        output_root=args.output_root,
         skip_existing=args.skip_existing,
         start_idx=args.start_idx,
     )

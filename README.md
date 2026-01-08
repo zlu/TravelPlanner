@@ -98,6 +98,22 @@ cd tools/planner
 python sole_planning.py  --set_type $SET_TYPE --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --strategy $STRATEGY
 ```
 
+## Token Reduction
+
+We added lightweight token-reduction steps for the two-stage agent to make tool results smaller and cheaper to pass into planning:
+
+- Tool output compression + row caps + schema allowlists: `utils/token_reduction.py`
+- Cached tool results + compact Notebook payloads + scratchpad truncation: `agents/tool_agents.py`
+- Notebook now stores JSON-friendly records instead of DataFrame strings: `tools/notebook/apis.py`
+
+Quick sanity check:
+
+```bash
+python tools/token_saving_check.py --output_dir smt_token_output
+```
+
+The current sample report at `smt_token_output/token_saving_report.json` shows the notebook payload dropping from 11268 tokens to 8963 tokens (~20% reduction) for a Seattle → New York 2022-04-01 case.
+
 ## Postprocess
 
 In order to parse natural language plans, we use gpt-4 to convert these plans into json formats. We encourage developers to try different parsing prompts to obtain better-formatted plans.

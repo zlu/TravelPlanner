@@ -20,6 +20,7 @@ from langchain.schema import (
 )
 from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
+from utils.token_reduction import compress_tool_output, summarize_tool_output
 import sys
 import json
 import openai
@@ -80,6 +81,7 @@ class ReactAgent:
         self.answer = ''
         self.max_steps = max_steps
         self.mode = mode
+        self.token_reduction_enabled = os.getenv("TOKEN_REDUCTION", "1") != "0"
 
         self.react_name = react_llm_name
         self.planner_name = planner_llm_name
@@ -289,9 +291,27 @@ class ReactAgent:
             if action_type == 'FlightSearch':
                 try:
                     if validate_date_format(action_arg.split(', ')[2]) and validate_city_format(action_arg.split(', ')[0],self.city_set ) and validate_city_format(action_arg.split(', ')[1],self.city_set):
-                        self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                        self.current_data = self.tools['flights'].run(action_arg.split(', ')[0], action_arg.split(', ')[1], action_arg.split(', ')[2])
-                        self.current_observation = str(to_string(self.current_data))
+                        tool_key = "flights"
+                        self._mask_previous_observation()
+                        cached = self._get_cached_tool_result(tool_key, action_arg)
+                        if cached is None:
+                            raw = self.tools['flights'].run(action_arg.split(', ')[0], action_arg.split(', ')[1], action_arg.split(', ')[2])
+                            if self.token_reduction_enabled:
+                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                            else:
+                                self.current_data = to_string(raw)
+                                self.current_observation = self.current_data
+                            self._cache_tool_result(tool_key, action_arg, self.current_data)
+                            cached_tag = ""
+                        else:
+                            self.current_data = cached
+                            cached_tag = "[cached] "
+                        if cached is not None and self.token_reduction_enabled:
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        elif cached is not None:
+                            self.current_observation = str(self.current_data)
+                        self.current_observation = f"{cached_tag}{self.current_observation}"
                         self.scratchpad += self.current_observation 
                         self.__reset_record()
                         self.json_log[-1]['state'] = f'Successful'
@@ -319,9 +339,27 @@ class ReactAgent:
 
                 try:
                     if validate_city_format(action_arg, self.city_set):
-                        self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip().strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                        self.current_data = self.tools['attractions'].run(action_arg)
-                        self.current_observation = to_string(self.current_data).strip('\n').strip()
+                        tool_key = "attractions"
+                        self._mask_previous_observation()
+                        cached = self._get_cached_tool_result(tool_key, action_arg)
+                        if cached is None:
+                            raw = self.tools['attractions'].run(action_arg)
+                            if self.token_reduction_enabled:
+                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                            else:
+                                self.current_data = to_string(raw)
+                                self.current_observation = self.current_data
+                            self._cache_tool_result(tool_key, action_arg, self.current_data)
+                            cached_tag = ""
+                        else:
+                            self.current_data = cached
+                            cached_tag = "[cached] "
+                        if cached is not None and self.token_reduction_enabled:
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        elif cached is not None:
+                            self.current_observation = str(self.current_data)
+                        self.current_observation = f"{cached_tag}{self.current_observation}"
                         self.scratchpad += self.current_observation
                         self.__reset_record()
                         self.json_log[-1]['state'] = f'Successful'
@@ -341,9 +379,27 @@ class ReactAgent:
 
                 try:
                     if validate_city_format(action_arg, self.city_set):
-                        self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip().strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                        self.current_data = self.tools['accommodations'].run(action_arg)
-                        self.current_observation = to_string(self.current_data).strip('\n').strip()
+                        tool_key = "accommodations"
+                        self._mask_previous_observation()
+                        cached = self._get_cached_tool_result(tool_key, action_arg)
+                        if cached is None:
+                            raw = self.tools['accommodations'].run(action_arg)
+                            if self.token_reduction_enabled:
+                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                            else:
+                                self.current_data = to_string(raw)
+                                self.current_observation = self.current_data
+                            self._cache_tool_result(tool_key, action_arg, self.current_data)
+                            cached_tag = ""
+                        else:
+                            self.current_data = cached
+                            cached_tag = "[cached] "
+                        if cached is not None and self.token_reduction_enabled:
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        elif cached is not None:
+                            self.current_observation = str(self.current_data)
+                        self.current_observation = f"{cached_tag}{self.current_observation}"
                         self.scratchpad += self.current_observation
                         self.__reset_record()
                         self.json_log[-1]['state'] = f'Successful'
@@ -363,9 +419,27 @@ class ReactAgent:
 
                 try:
                     if validate_city_format(action_arg, self.city_set):
-                        self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip().strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                        self.current_data = self.tools['restaurants'].run(action_arg)
-                        self.current_observation = to_string(self.current_data).strip()
+                        tool_key = "restaurants"
+                        self._mask_previous_observation()
+                        cached = self._get_cached_tool_result(tool_key, action_arg)
+                        if cached is None:
+                            raw = self.tools['restaurants'].run(action_arg)
+                            if self.token_reduction_enabled:
+                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                            else:
+                                self.current_data = to_string(raw)
+                                self.current_observation = self.current_data
+                            self._cache_tool_result(tool_key, action_arg, self.current_data)
+                            cached_tag = ""
+                        else:
+                            self.current_data = cached
+                            cached_tag = "[cached] "
+                        if cached is not None and self.token_reduction_enabled:
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        elif cached is not None:
+                            self.current_observation = str(self.current_data)
+                        self.current_observation = f"{cached_tag}{self.current_observation}"
                         self.scratchpad += self.current_observation
                         self.__reset_record()
                         self.json_log[-1]['state'] = f'Successful'
@@ -385,9 +459,27 @@ class ReactAgent:
                     
             elif action_type == "CitySearch":
                 try:
-                    self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                    # self.current_data = self.tools['cities'].run(action_arg)
-                    self.current_observation = to_string(self.tools['cities'].run(action_arg)).strip()
+                    tool_key = "cities"
+                    self._mask_previous_observation()
+                    cached = self._get_cached_tool_result(tool_key, action_arg)
+                    if cached is None:
+                        raw = self.tools['cities'].run(action_arg)
+                        if self.token_reduction_enabled:
+                            self.current_data = compress_tool_output(tool_key, raw)
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        else:
+                            self.current_data = str(raw)
+                            self.current_observation = self.current_data
+                        self._cache_tool_result(tool_key, action_arg, self.current_data)
+                        cached_tag = ""
+                    else:
+                        self.current_data = cached
+                        cached_tag = "[cached] "
+                    if cached is not None and self.token_reduction_enabled:
+                        self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                    elif cached is not None:
+                        self.current_observation = str(self.current_data)
+                    self.current_observation = f"{cached_tag}{self.current_observation}"
                     self.scratchpad += self.current_observation
                     self.__reset_record()
                     self.json_log[-1]['state'] = f'Successful'
@@ -409,9 +501,27 @@ class ReactAgent:
             elif action_type == 'GoogleDistanceMatrix':
 
                 try:
-                    self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
-                    self.current_data = self.tools['googleDistanceMatrix'].run(action_arg.split(', ')[0],action_arg.split(', ')[1],action_arg.split(', ')[2])
-                    self.current_observation =  to_string(self.current_data)
+                    tool_key = "googleDistanceMatrix"
+                    self._mask_previous_observation()
+                    cached = self._get_cached_tool_result(tool_key, action_arg)
+                    if cached is None:
+                        raw = self.tools['googleDistanceMatrix'].run(action_arg.split(', ')[0],action_arg.split(', ')[1],action_arg.split(', ')[2])
+                        if self.token_reduction_enabled:
+                            self.current_data = compress_tool_output(tool_key, raw)
+                            self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                        else:
+                            self.current_data = str(raw)
+                            self.current_observation = self.current_data
+                        self._cache_tool_result(tool_key, action_arg, self.current_data)
+                        cached_tag = ""
+                    else:
+                        self.current_data = cached
+                        cached_tag = "[cached] "
+                    if cached is not None and self.token_reduction_enabled:
+                        self.current_observation = summarize_tool_output(tool_key, self.current_data)
+                    elif cached is not None:
+                        self.current_observation = str(self.current_data)
+                    self.current_observation = f"{cached_tag}{self.current_observation}"
                     self.scratchpad += self.current_observation 
                     self.__reset_record()
                     self.json_log[-1]['state'] = f'Successful'
@@ -426,7 +536,7 @@ class ReactAgent:
             
             elif action_type == 'NotebookWrite':
                 try:
-                    self.scratchpad = self.scratchpad.replace(to_string(self.current_data).strip(),'Masked due to limited length. Make sure the data has been written in Notebook.')
+                    self._mask_previous_observation()
                     self.current_observation = str(self.tools['notebook'].write(self.current_data, action_arg))
                     self.scratchpad  +=  self.current_observation
                     self.__reset_record()
@@ -442,8 +552,8 @@ class ReactAgent:
 
             elif action_type == "Planner":
                 # try:
-
-                    self.current_observation = str(self.tools['planner'].run(str(self.tools['notebook'].list_all()),action_arg))
+                    notebook_payload = json.dumps(self.tools['notebook'].list_all(), ensure_ascii=True, separators=(",", ":"))
+                    self.current_observation = str(self.tools['planner'].run(notebook_payload,action_arg))
                     self.scratchpad  +=  self.current_observation
                     self.answer = self.current_observation
                     self.__reset_record()
@@ -494,9 +604,16 @@ class ReactAgent:
 
     def _build_agent_prompt(self) -> str:
         if self.mode == "zero_shot":
+            scratchpad = self.scratchpad
+            prompt = self.agent_prompt.format(
+                query=self.query,
+                scratchpad=scratchpad)
+            if len(self.enc.encode(prompt)) > self.max_token_length:
+                scratchpad = truncate_scratchpad(scratchpad, n_tokens=max(self.max_token_length - 1000, 500))
+                self.scratchpad = scratchpad
             return self.agent_prompt.format(
                 query=self.query,
-                scratchpad=self.scratchpad)
+                scratchpad=scratchpad)
 
     def is_finished(self) -> bool:
         return self.finished
@@ -515,6 +632,7 @@ class ReactAgent:
         self.current_observation = ''
         self.current_data = None
         self.last_actions = []
+        self.tool_cache = {}
 
         if 'notebook' in self.tools:
             self.tools['notebook'].reset()
@@ -522,6 +640,26 @@ class ReactAgent:
     def __reset_record(self) -> None:
         self.retry_record = {key: 0 for key in self.retry_record}
         self.retry_record['invalidAction'] = 0
+
+    def _mask_previous_observation(self) -> None:
+        if self.current_observation:
+            self.scratchpad = self.scratchpad.replace(
+                self.current_observation,
+                "Masked due to limited length. Make sure the data has been written in Notebook.",
+            )
+
+    def _make_cache_key(self, tool_key: str, action_arg: str) -> str:
+        return f"{tool_key}:{action_arg}"
+
+    def _get_cached_tool_result(self, tool_key: str, action_arg: str):
+        if not self.token_reduction_enabled:
+            return None
+        return self.tool_cache.get(self._make_cache_key(tool_key, action_arg))
+
+    def _cache_tool_result(self, tool_key: str, action_arg: str, data) -> None:
+        if not self.token_reduction_enabled:
+            return
+        self.tool_cache[self._make_cache_key(tool_key, action_arg)] = data
 
 
     def load_tools(self, tools: List[str], planner_model_name=None) -> Dict[str, Any]:
@@ -569,12 +707,11 @@ def format_step(step: str) -> str:
 
 def truncate_scratchpad(scratchpad: str, n_tokens: int = 1600, tokenizer=gpt2_enc) -> str:
     lines = scratchpad.split('\n')
-    observations = filter(lambda x: x.startswith('Observation'), lines)
-    observations_by_tokens = sorted(observations, key=lambda x: len(tokenizer.encode(x)))
-    while len(gpt2_enc.encode('\n'.join(lines))) > n_tokens:
-        largest_observation = observations_by_tokens.pop(-1)
-        ind = lines.index(largest_observation)
-        lines[ind] = largest_observation.split(':')[0] + ': [truncated wikipedia excerpt]'
+    observation_indices = [i for i, line in enumerate(lines) if line.startswith('Observation')]
+    while len(gpt2_enc.encode('\n'.join(lines))) > n_tokens and observation_indices:
+        ind = observation_indices.pop(0)
+        prefix = lines[ind].split(':')[0]
+        lines[ind] = f"{prefix}: [truncated to save tokens]"
     return '\n'.join(lines)
 
 
@@ -709,4 +846,3 @@ if __name__ == '__main__':
                 json.dump(result, f, indent=4)
         
     print(cb)
-

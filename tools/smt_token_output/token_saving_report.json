@@ -1,0 +1,51 @@
+{
+  "case": {
+    "origin": "Seattle",
+    "destination": "New York",
+    "flight_date": "2022-04-01",
+    "city": "New York",
+    "distance_origin": "Detroit",
+    "distance_destination": "Norfolk"
+  },
+  "notebook_tokens": {
+    "raw_tokens": 11268,
+    "compressed_tokens": 8963
+  },
+  "tool_reports": [
+    {
+      "tool": "flights",
+      "raw_tokens": 944,
+      "compressed_tokens": 1251,
+      "raw_preview": "Flight Number  Price DepTime ArrTime  ActualElapsedTime FlightDate OriginCityName DestCityName  Distance\n     F0239998    950   21:56   05:50 4 hours 54 minutes 2022-04-01        Seattle     New York ",
+      "compressed_preview": "[{\"Flight Number\":\"F0239998\",\"Price\":950,\"DepTime\":\"21:56\",\"ArrTime\":\"05:50\",\"FlightDate\":\"2022-04-01\",\"OriginCityName\":\"Seattle\",\"DestCityName\":\"New York\"},{\"Flight Number\":\"F0240209\",\"Price\":783,\"De"
+    },
+    {
+      "tool": "accommodations",
+      "raw_tokens": 2563,
+      "compressed_tokens": 2540,
+      "raw_preview": "                                              NAME  price       room type                                  house_rules  minimum nights  maximum occupancy  review rate number     city\nVersatile private",
+      "compressed_preview": "[{\"NAME\":\"Versatile private room in Harlem/Hamilton Heights!\",\"price\":398.0,\"room type\":\"Private room\",\"house_rules\":\"No pets & No visitors & No parties\",\"minimum nights\":4.0,\"maximum occupancy\":1,\"ci"
+    },
+    {
+      "tool": "restaurants",
+      "raw_tokens": 3095,
+      "compressed_tokens": 2911,
+      "raw_preview": "                              Name  Average Cost                                             Cuisines  Aggregate Rating     City\n            Seasons 52 Fresh Grill            30                   Seaf",
+      "compressed_preview": "[{\"Name\":\"Seasons 52 Fresh Grill\",\"Average Cost\":30,\"Cuisines\":\"Seafood, Indian, Desserts, Italian\",\"Aggregate Rating\":4.4,\"City\":\"New York\"},{\"Name\":\"Gurgaon Hights\",\"Average Cost\":46,\"Cuisines\":\"Caf"
+    },
+    {
+      "tool": "attractions",
+      "raw_tokens": 4220,
+      "compressed_tokens": 1890,
+      "raw_preview": "                        Name  Latitude  Longitude                                        Address          Phone                                                                         Website     City",
+      "compressed_preview": "[{\"Name\":\"Top of The Rock\",\"Address\":\"30 Rockefeller Plaza, New York, NY 10112, USA\",\"City\":\"New York\"},{\"Name\":\"One World Observatory\",\"Address\":\"117 West St, New York, NY 10007, USA\",\"City\":\"New Yor"
+    },
+    {
+      "tool": "googleDistanceMatrix",
+      "raw_tokens": 90,
+      "compressed_tokens": 92,
+      "raw_preview": "driving, from Detroit to Norfolk, duration: 10 hours 55 mins, distance: 1,144 km, cost: 57",
+      "compressed_preview": "\"driving, from Detroit to Norfolk, duration: 10 hours 55 mins, distance: 1,144 km, cost: 57\""
+    }
+  ]
+}
