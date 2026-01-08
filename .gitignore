@@ -26,6 +26,7 @@ work_summary.pdf
 
 5-query-results.txt
 smt_output/**
+smt_token_output/**
 smt_aggregate_results.jsonl
 smt_padded.jsonl
 
