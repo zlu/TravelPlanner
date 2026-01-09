@@ -32,3 +32,5 @@ smt_padded.jsonl
 
 eval_result.txt
 validation_queries.json
+
+evaluation/**
