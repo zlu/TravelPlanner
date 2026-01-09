@@ -1,13 +1,24 @@
 import re, string, os, sys
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "tools/planner")))
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "../tools/planner")))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(REPO_ROOT))
+sys.path.append(str(REPO_ROOT / "tools" / "planner"))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import importlib
 from typing import List, Dict, Any
-import tiktoken
+try:
+    import tiktoken
+except Exception:
+    class _DummyEnc:
+        def encode(self, text: str):
+            return text.split()
+
+    class tiktoken:  # type: ignore[no-redef]
+        @staticmethod
+        def encoding_for_model(_model: str) -> _DummyEnc:
+            return _DummyEnc()
 from pandas import DataFrame
 from langchain_community.chat_models import ChatOpenAI, ChatOllama
 from langchain_community.callbacks import get_openai_callback
@@ -21,6 +32,7 @@ from langchain.schema import (
 from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
 from utils.token_reduction import compress_tool_output, summarize_tool_output
+from utils.user_profile import build_user_profile, format_profile
 import sys
 import json
 import openai
@@ -82,6 +94,8 @@ class ReactAgent:
         self.max_steps = max_steps
         self.mode = mode
         self.token_reduction_enabled = os.getenv("TOKEN_REDUCTION", "1") != "0"
+        self.shared_tool_cache = os.getenv("SHARED_TOOL_CACHE", "0") == "1"
+        self.tool_cache = {}
 
         self.react_name = react_llm_name
         self.planner_name = planner_llm_name
@@ -93,6 +107,9 @@ class ReactAgent:
 
         self.current_observation = ''
         self.current_data = None
+        self.user_profile = None
+        self.query_context = None
+        self.user_profile_mode = os.getenv("USER_PROFILE_MODE", "off").lower()
 
         if react_llm_name.startswith('ollama:'):
             # Use a local Ollama model via LangChain's ChatOllama wrapper.
@@ -196,9 +213,22 @@ class ReactAgent:
 
         self.__reset_agent()
 
-    def run(self, query, reset=True) -> None:
+    def run(self, query, query_item=None, reset=True) -> None:
 
         self.query = query
+        self.query_context = None
+        self.user_profile = None
+        if query_item and self.user_profile_mode in {"core", "full"}:
+            self.user_profile = build_user_profile(query_item)
+            include_secondary = self.user_profile_mode == "full"
+            profile_text = format_profile(self.user_profile, include_secondary)
+            if self.user_profile_mode == "core":
+                self.query_context = f"Core constraints (JSON): {profile_text}"
+            else:
+                self.query_context = (
+                    f"Core constraints (JSON): {profile_text}\n"
+                    f"Original query: {query}"
+                )
         
         if reset:
             self.__reset_agent()
@@ -605,14 +635,15 @@ class ReactAgent:
     def _build_agent_prompt(self) -> str:
         if self.mode == "zero_shot":
             scratchpad = self.scratchpad
+            query_text = self.query_context or self.query
             prompt = self.agent_prompt.format(
-                query=self.query,
+                query=query_text,
                 scratchpad=scratchpad)
             if len(self.enc.encode(prompt)) > self.max_token_length:
                 scratchpad = truncate_scratchpad(scratchpad, n_tokens=max(self.max_token_length - 1000, 500))
                 self.scratchpad = scratchpad
             return self.agent_prompt.format(
-                query=self.query,
+                query=query_text,
                 scratchpad=scratchpad)
 
     def is_finished(self) -> bool:
@@ -632,7 +663,8 @@ class ReactAgent:
         self.current_observation = ''
         self.current_data = None
         self.last_actions = []
-        self.tool_cache = {}
+        if not self.shared_tool_cache:
+            self.tool_cache = {}
 
         if 'notebook' in self.tools:
             self.tools['notebook'].reset()
@@ -806,18 +838,23 @@ if __name__ == '__main__':
     parser.add_argument("--set_type", type=str, default="validation")
     parser.add_argument("--model_name", type=str, default="gpt-3.5-turbo-1106")
     parser.add_argument("--output_dir", type=str, default="./")
+    parser.add_argument("--start_idx", type=int, default=1)
+    parser.add_argument("--max_items", type=int, default=None)
     args = parser.parse_args()
     # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if args.set_type == 'validation':
         query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
     elif args.set_type == 'test':
         query_data_list  = load_dataset('osunlp/TravelPlanner','test', download_mode='reuse_cache_if_exists')['test']
-    numbers = [i for i in range(1,len(query_data_list)+1)]
+    numbers = [i for i in range(1, len(query_data_list) + 1) if i >= args.start_idx]
+    if args.max_items:
+        numbers = numbers[: args.max_items]
     agent = ReactAgent(None, tools=tools_list,max_steps=30,react_llm_name=args.model_name,planner_llm_name=args.model_name)
     with get_openai_callback() as cb:
         
         for number in tqdm(numbers[:]):
-            query = query_data_list[number-1]['query']
+            query_item = query_data_list[number-1]
+            query = query_item['query']
               # check if the directory exists
             if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}')):
                 os.makedirs(os.path.join(f'{args.output_dir}/{args.set_type}'))
@@ -826,8 +863,12 @@ if __name__ == '__main__':
             else:
                 result = json.load(open(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json')))
                 
+            profile = build_user_profile(query_item)
+            with open(os.path.join(f'{args.output_dir}/{args.set_type}/user_profile_{number}.json'), 'w') as f:
+                json.dump(profile, f, indent=2)
+
             while True:
-                planner_results, scratchpad, action_log  = agent.run(query)
+                planner_results, scratchpad, action_log  = agent.run(query, query_item=query_item)
                 if planner_results != None:
                     break
             
@@ -840,6 +881,7 @@ if __name__ == '__main__':
                 result[-1][f'{args.model_name}_two-stage_results_logs'] = scratchpad 
                 result[-1][f'{args.model_name}_two-stage_results'] = planner_results
                 result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
+                result[-1]['user_profile'] = profile
 
             # write to json file
             with open(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json'), 'w') as f:

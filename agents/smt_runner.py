@@ -203,17 +203,28 @@ def _shim_optional_dependencies():
         )
 
 
-def _patch_data_paths(data_root: Path):
+def _patch_data_paths(data_root: Path, max_city_candidates: Optional[int] = None):
     """
     Force upstream tool loaders to read from our TravelPlanner database directory.
     """
     try:
         import tools.cities.apis as cities
         orig_cities_init = cities.Cities.__init__
+        orig_cities_run = cities.Cities.run
         def cities_init(self, path=None):
             path = str(data_root / "background/citySet_with_states.txt")
             return orig_cities_init(self, path=path)
+        def cities_run(self, state, *args, **kwargs):
+            result = orig_cities_run(self, state, *args, **kwargs)
+            if (
+                max_city_candidates
+                and isinstance(result, list)
+                and len(result) > max_city_candidates
+            ):
+                return result[:max_city_candidates]
+            return result
         cities.Cities.__init__ = cities_init
+        cities.Cities.run = cities_run
     except Exception:
         pass
 
@@ -362,6 +373,7 @@ def run_smt(
     output_root: Optional[Path] = None,
     skip_existing: bool = True,
     start_idx: int = 1,
+    max_city_candidates: Optional[int] = None,
 ):
     # Resolve SMT repo location: CLI arg > env > common sibling defaults.
     if smt_repo:
@@ -389,7 +401,7 @@ def run_smt(
     module = _load_formal_module(repo_root)
     # Ensure data files resolve from this repo's database folder.
     data_root = Path(__file__).resolve().parents[1] / "database"
-    _patch_data_paths(data_root)
+    _patch_data_paths(data_root, max_city_candidates)
     _maybe_patch_deepseek(module)
 
     dataset = _load_queries(set_type, dataset_path)
@@ -767,6 +779,12 @@ def main():
         help="1-based index to start from when iterating queries (skip earlier).",
     )
     parser.add_argument(
+        "--max_city_candidates",
+        type=int,
+        default=None,
+        help="Optional cap on number of candidate cities returned by CitySearch.run (helps avoid combinatorial blowups).",
+    )
+    parser.add_argument(
         "--skip_existing",
         action="store_true",
         help="Skip queries whose plan.txt already exists.",
@@ -782,6 +800,7 @@ def main():
         output_root=args.output_root,
         skip_existing=args.skip_existing,
         start_idx=args.start_idx,
+        max_city_candidates=args.max_city_candidates,
     )
 
 

@@ -26,6 +26,7 @@ import argparse
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+PLANNER_CONTEXT_WINDOW_DAYS = os.environ.get('PLANNER_CONTEXT_WINDOW_DAYS')
 
 
 def catch_openai_api_error():
@@ -135,9 +136,51 @@ class Planner:
                 return self.llm([HumanMessage(content=self._build_agent_prompt(text, query))]).content
 
     def _build_agent_prompt(self, text, query) -> str:
+        if PLANNER_CONTEXT_WINDOW_DAYS:
+            try:
+                keep_days = int(PLANNER_CONTEXT_WINDOW_DAYS)
+                text = _prune_day_sections(text, keep_days)
+            except ValueError:
+                pass
         return self.agent_prompt.format(
             text=text,
             query=query)
+
+
+def _prune_day_sections(text: str, keep_days: int) -> str:
+    if keep_days <= 0:
+        return text
+    pattern = re.compile(r"(?m)^Day\\s+\\d+\\s*:")
+    matches = list(pattern.finditer(text))
+    if len(matches) <= keep_days:
+        return text
+
+    preamble = text[:matches[0].start()]
+    keep_start = matches[-keep_days].start()
+    removed = text[matches[0].start():keep_start]
+    kept = text[keep_start:]
+
+    summaries = []
+    for chunk in re.split(r"(?m)(?=^Day\\s+\\d+\\s*:)", removed):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        lines = chunk.splitlines()
+        header = lines[0]
+        current_city = next((line for line in lines if line.startswith("Current City:")), "")
+        accommodation = next((line for line in lines if line.startswith("Accommodation:")), "")
+        summary_parts = [header]
+        if current_city:
+            summary_parts.append(current_city)
+        if accommodation:
+            summary_parts.append(accommodation)
+        summaries.append(" | ".join(summary_parts))
+
+    summary_block = ""
+    if summaries:
+        summary_block = "Earlier days (summary):\n" + "\n".join(summaries) + "\n\n"
+
+    return preamble + summary_block + kept
 
 
 class ReactPlanner:
