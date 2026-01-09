@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
@@ -27,6 +28,67 @@ OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 PLANNER_CONTEXT_WINDOW_DAYS = os.environ.get('PLANNER_CONTEXT_WINDOW_DAYS')
+PLANNER_BACKEND = os.environ.get("PLANNER_BACKEND", "llm").lower()
+
+
+def _load_smt_runner():
+    from tools.hybrid_two_stage_smt import run_single_query
+    return run_single_query
+
+
+class SmtPlanner:
+    def __init__(self, model_name: str = "gpt-4o") -> None:
+        self.output_root = Path(
+            os.getenv("SMT_PLANNER_OUTPUT_ROOT", "smt_token_output/smt_planner")
+        )
+        repo_override = os.getenv("SMT_PLANNER_REPO")
+        self.smt_repo = Path(repo_override) if repo_override else None
+        self.model_version = os.getenv("SMT_PLANNER_MODEL", model_name)
+        self.full_db = os.getenv("SMT_PLANNER_FULL_DB", "0") == "1"
+        self.top_k_cities = int(os.getenv("SMT_PLANNER_TOP_K_CITIES", "6"))
+        self.set_type = os.getenv("SMT_PLANNER_SET_TYPE", "validation")
+
+    def run(self, _text, query, *, query_item=None, query_index=None, log_file=None) -> str:
+        run_single_query = _load_smt_runner()
+        smt_query = query
+        if query_item and isinstance(query_item, dict) and query_item.get("query"):
+            smt_query = query_item["query"]
+        index = int(query_index) if query_index else 1
+        query_json = None
+        if query_item:
+            query_json = {
+                "org": query_item["org"],
+                "dest": query_item["dest"],
+                "days": query_item["days"],
+                "visiting_city_number": query_item["visiting_city_number"],
+                "date": query_item["date"],
+                "people_number": query_item["people_number"],
+                "local_constraint": query_item.get("local_constraint"),
+                "budget": query_item["budget"],
+            }
+        result = run_single_query(
+            smt_query,
+            query_json,
+            index=index,
+            set_type=self.set_type,
+            output_root=self.output_root,
+            smt_repo=self.smt_repo,
+            model_version=self.model_version,
+            full_db=self.full_db,
+            top_k_cities=self.top_k_cities,
+        )
+        status = result.get("status")
+        plan = result.get("plan")
+        error = result.get("error")
+        if log_file:
+            log_file.write(f"\n[SmtPlanner] status={status}\n")
+        if status == "sat" and plan:
+            return plan
+        if status == "unsat":
+            return "SMT solver returned unsat."
+        if error:
+            return f"SMT solver error: {error}"
+        return "SMT planner did not return a plan."
 
 
 def catch_openai_api_error():
@@ -61,6 +123,13 @@ class Planner:
         self.agent_prompt = agent_prompt
         self.scratchpad: str = ''
         self.model_name = model_name
+        self.backend = PLANNER_BACKEND
+        self.smt_planner = None
+        if self.backend == "smt":
+            self.smt_planner = SmtPlanner(model_name=model_name)
+            print("[Planner] SMT backend enabled.")
+            return
+
         self.enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
         if model_name in  ['mistral-7B-32K']:
@@ -123,7 +192,15 @@ class Planner:
             extra = None
         print(f"[Planner] LLM backend loaded: {backend_name} (model_name={model_name}, extra={extra})")
 
-    def run(self, text, query, log_file=None) -> str:
+    def run(self, text, query, *, query_item=None, query_index=None, log_file=None) -> str:
+        if self.backend == "smt" and self.smt_planner is not None:
+            return self.smt_planner.run(
+                text,
+                query,
+                query_item=query_item,
+                query_index=query_index,
+                log_file=log_file,
+            )
         if log_file:
             log_file.write('\n---------------Planner\n'+self._build_agent_prompt(text, query))
         # print(self._build_agent_prompt(text, query))

@@ -38,7 +38,7 @@ except ImportError:
                     "top_p": top_p,
                 }
                 headers = {"Authorization": f"Bearer {key}"}
-                resp = requests.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=60)
+                resp = requests.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=200)
                 resp.raise_for_status()
                 data = resp.json()
                 if "choices" in data and data["choices"]:
@@ -340,7 +340,7 @@ def _maybe_patch_deepseek(module):
     openai.api_base = os.getenv("OPENAI_API_BASE", "https://api.deepseek.com/v1")
     model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
-    timeout = float(os.getenv("DEEPSEEK_TIMEOUT", "60"))
+    timeout = float(os.getenv("DEEPSEEK_TIMEOUT", "200"))
 
     def ds_response(messages, _model_name=None):
         resp = openai.ChatCompletion.create(
