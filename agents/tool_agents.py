@@ -33,6 +33,7 @@ from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
 from utils.token_reduction import compress_tool_output, summarize_tool_output
 from utils.user_profile import build_user_profile, format_profile
+from utils.constraint_policy import build_constraint_policy, format_constraint_policy
 import sys
 import json
 import openai
@@ -96,6 +97,10 @@ class ReactAgent:
         self.token_reduction_enabled = os.getenv("TOKEN_REDUCTION", "1") != "0"
         self.shared_tool_cache = os.getenv("SHARED_TOOL_CACHE", "0") == "1"
         self.tool_cache = {}
+        self.token_audit_enabled = os.getenv("TOKEN_REDUCTION_AUDIT", "0") == "1"
+        self.token_audit_entries = []
+        self.token_audit_cache_hits = 0
+        self.token_audit_cache_misses = 0
 
         self.react_name = react_llm_name
         self.planner_name = planner_llm_name
@@ -109,7 +114,14 @@ class ReactAgent:
         self.current_data = None
         self.user_profile = None
         self.query_context = None
+        self.query_item = None
+        self.query_index = None
         self.user_profile_mode = os.getenv("USER_PROFILE_MODE", "off").lower()
+        self.constraint_policy_mode = os.getenv("CONSTRAINT_POLICY_MODE", "off").lower()
+        self.constraint_policy_text = None
+        self.notebook_keep_days = _parse_env_int("NOTEBOOK_CONTEXT_WINDOW_DAYS")
+        self.notebook_keep_undated = os.getenv("NOTEBOOK_CONTEXT_KEEP_UNDATED", "1") == "1"
+        self.notebook_summary = os.getenv("NOTEBOOK_CONTEXT_SUMMARY", "1") == "1"
 
         if react_llm_name.startswith('ollama:'):
             # Use a local Ollama model via LangChain's ChatOllama wrapper.
@@ -213,11 +225,18 @@ class ReactAgent:
 
         self.__reset_agent()
 
-    def run(self, query, query_item=None, reset=True) -> None:
+    def run(self, query, query_item=None, query_index=None, reset=True) -> None:
 
         self.query = query
         self.query_context = None
         self.user_profile = None
+        self.query_item = query_item
+        self.query_index = query_index
+        self.constraint_policy_text = None
+        if self.token_audit_enabled:
+            self.token_audit_entries = []
+            self.token_audit_cache_hits = 0
+            self.token_audit_cache_misses = 0
         if query_item and self.user_profile_mode in {"core", "full"}:
             self.user_profile = build_user_profile(query_item)
             include_secondary = self.user_profile_mode == "full"
@@ -229,6 +248,10 @@ class ReactAgent:
                     f"Core constraints (JSON): {profile_text}\n"
                     f"Original query: {query}"
                 )
+        if query_item and self.constraint_policy_mode != "off":
+            policy = build_constraint_policy(query_item)
+            policy_text = format_constraint_policy(policy)
+            self.constraint_policy_text = f"Constraint policy (JSON): {policy_text}"
         
         if reset:
             self.__reset_agent()
@@ -326,16 +349,19 @@ class ReactAgent:
                         cached = self._get_cached_tool_result(tool_key, action_arg)
                         if cached is None:
                             raw = self.tools['flights'].run(action_arg.split(', ')[0], action_arg.split(', ')[1], action_arg.split(', ')[2])
+                            compressed = compress_tool_output(tool_key, raw)
                             if self.token_reduction_enabled:
-                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_data = compressed
                                 self.current_observation = summarize_tool_output(tool_key, self.current_data)
                             else:
                                 self.current_data = to_string(raw)
                                 self.current_observation = self.current_data
+                            self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                             self._cache_tool_result(tool_key, action_arg, self.current_data)
                             cached_tag = ""
                         else:
                             self.current_data = cached
+                            self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                             cached_tag = "[cached] "
                         if cached is not None and self.token_reduction_enabled:
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -374,16 +400,19 @@ class ReactAgent:
                         cached = self._get_cached_tool_result(tool_key, action_arg)
                         if cached is None:
                             raw = self.tools['attractions'].run(action_arg)
+                            compressed = compress_tool_output(tool_key, raw)
                             if self.token_reduction_enabled:
-                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_data = compressed
                                 self.current_observation = summarize_tool_output(tool_key, self.current_data)
                             else:
                                 self.current_data = to_string(raw)
                                 self.current_observation = self.current_data
+                            self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                             self._cache_tool_result(tool_key, action_arg, self.current_data)
                             cached_tag = ""
                         else:
                             self.current_data = cached
+                            self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                             cached_tag = "[cached] "
                         if cached is not None and self.token_reduction_enabled:
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -414,16 +443,19 @@ class ReactAgent:
                         cached = self._get_cached_tool_result(tool_key, action_arg)
                         if cached is None:
                             raw = self.tools['accommodations'].run(action_arg)
+                            compressed = compress_tool_output(tool_key, raw)
                             if self.token_reduction_enabled:
-                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_data = compressed
                                 self.current_observation = summarize_tool_output(tool_key, self.current_data)
                             else:
                                 self.current_data = to_string(raw)
                                 self.current_observation = self.current_data
+                            self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                             self._cache_tool_result(tool_key, action_arg, self.current_data)
                             cached_tag = ""
                         else:
                             self.current_data = cached
+                            self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                             cached_tag = "[cached] "
                         if cached is not None and self.token_reduction_enabled:
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -454,16 +486,19 @@ class ReactAgent:
                         cached = self._get_cached_tool_result(tool_key, action_arg)
                         if cached is None:
                             raw = self.tools['restaurants'].run(action_arg)
+                            compressed = compress_tool_output(tool_key, raw)
                             if self.token_reduction_enabled:
-                                self.current_data = compress_tool_output(tool_key, raw)
+                                self.current_data = compressed
                                 self.current_observation = summarize_tool_output(tool_key, self.current_data)
                             else:
                                 self.current_data = to_string(raw)
                                 self.current_observation = self.current_data
+                            self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                             self._cache_tool_result(tool_key, action_arg, self.current_data)
                             cached_tag = ""
                         else:
                             self.current_data = cached
+                            self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                             cached_tag = "[cached] "
                         if cached is not None and self.token_reduction_enabled:
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -494,16 +529,19 @@ class ReactAgent:
                     cached = self._get_cached_tool_result(tool_key, action_arg)
                     if cached is None:
                         raw = self.tools['cities'].run(action_arg)
+                        compressed = compress_tool_output(tool_key, raw)
                         if self.token_reduction_enabled:
-                            self.current_data = compress_tool_output(tool_key, raw)
+                            self.current_data = compressed
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
                         else:
                             self.current_data = str(raw)
                             self.current_observation = self.current_data
+                        self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                         self._cache_tool_result(tool_key, action_arg, self.current_data)
                         cached_tag = ""
                     else:
                         self.current_data = cached
+                        self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                         cached_tag = "[cached] "
                     if cached is not None and self.token_reduction_enabled:
                         self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -536,16 +574,19 @@ class ReactAgent:
                     cached = self._get_cached_tool_result(tool_key, action_arg)
                     if cached is None:
                         raw = self.tools['googleDistanceMatrix'].run(action_arg.split(', ')[0],action_arg.split(', ')[1],action_arg.split(', ')[2])
+                        compressed = compress_tool_output(tool_key, raw)
                         if self.token_reduction_enabled:
-                            self.current_data = compress_tool_output(tool_key, raw)
+                            self.current_data = compressed
                             self.current_observation = summarize_tool_output(tool_key, self.current_data)
                         else:
                             self.current_data = str(raw)
                             self.current_observation = self.current_data
+                        self._record_token_audit(tool_key, action_arg, raw, compressed, cached=False)
                         self._cache_tool_result(tool_key, action_arg, self.current_data)
                         cached_tag = ""
                     else:
                         self.current_data = cached
+                        self._record_token_audit(tool_key, action_arg, None, cached, cached=True)
                         cached_tag = "[cached] "
                     if cached is not None and self.token_reduction_enabled:
                         self.current_observation = summarize_tool_output(tool_key, self.current_data)
@@ -582,8 +623,26 @@ class ReactAgent:
 
             elif action_type == "Planner":
                 # try:
-                    notebook_payload = json.dumps(self.tools['notebook'].list_all(), ensure_ascii=True, separators=(",", ":"))
-                    self.current_observation = str(self.tools['planner'].run(notebook_payload,action_arg))
+                    notebook_entries = self.tools['notebook'].list_all()
+                    if self.notebook_keep_days:
+                        notebook_entries = _prune_notebook_entries(
+                            notebook_entries,
+                            self.query_item,
+                            self.notebook_keep_days,
+                            keep_undated=self.notebook_keep_undated,
+                            summarize=self.notebook_summary,
+                        )
+                    notebook_payload = json.dumps(notebook_entries, ensure_ascii=True, separators=(",", ":"))
+                    planner_query = _append_constraint_policy(action_arg, self.constraint_policy_text)
+                    self.current_observation = str(
+                        self.tools['planner'].run(
+                            notebook_payload,
+                            planner_query,
+                            query_item=self.query_item,
+                            query_index=self.query_index,
+                        )
+                    )
+                    self._write_token_audit()
                     self.scratchpad  +=  self.current_observation
                     self.answer = self.current_observation
                     self.__reset_record()
@@ -636,6 +695,7 @@ class ReactAgent:
         if self.mode == "zero_shot":
             scratchpad = self.scratchpad
             query_text = self.query_context or self.query
+            query_text = _append_constraint_policy(query_text, self.constraint_policy_text)
             prompt = self.agent_prompt.format(
                 query=query_text,
                 scratchpad=scratchpad)
@@ -693,6 +753,111 @@ class ReactAgent:
             return
         self.tool_cache[self._make_cache_key(tool_key, action_arg)] = data
 
+    def _record_token_audit(self, tool_key: str, action_arg: str, raw_data, compressed, cached: bool) -> None:
+        if not self.token_audit_enabled:
+            return
+        self.token_audit_entries.append(
+            {
+                "tool": tool_key,
+                "action_arg": action_arg,
+                "cache_key": self._make_cache_key(tool_key, action_arg),
+                "raw_text": to_string(raw_data) if raw_data is not None else None,
+                "compressed": compressed,
+                "cached": cached,
+            }
+        )
+        if cached:
+            self.token_audit_cache_hits += 1
+        else:
+            self.token_audit_cache_misses += 1
+
+    def _write_token_audit(self) -> None:
+        if not self.token_audit_enabled:
+            return
+        out_root = os.getenv("TOKEN_AUDIT_OUT_DIR")
+        if not out_root:
+            return
+        out_root_path = Path(out_root)
+        if not out_root_path.is_absolute():
+            out_root_path = (REPO_ROOT / out_root_path).resolve()
+        set_type = os.getenv("TOKEN_AUDIT_SET_TYPE", "validation")
+        index = self.query_index if self.query_index is not None else "unknown"
+        out_dir = out_root_path / set_type
+        out_dir.mkdir(parents=True, exist_ok=True)
+        encoder = _get_audit_encoder()
+
+        entries = list(self.token_audit_entries)
+        first_raw_by_key = {}
+        first_compact_by_key = {}
+        for entry in entries:
+            key = entry["cache_key"]
+            if entry.get("raw_text") and key not in first_raw_by_key:
+                first_raw_by_key[key] = entry["raw_text"]
+            if entry.get("compressed") is not None and key not in first_compact_by_key:
+                first_compact_by_key[key] = entry["compressed"]
+
+        raw_entries = []
+        compact_entries = []
+        for entry in entries:
+            raw_text = entry.get("raw_text") or first_raw_by_key.get(entry["cache_key"])
+            if raw_text is not None:
+                raw_entries.append({"Short Description": f"{entry['tool']} sample", "Content": raw_text})
+            if entry.get("compressed") is not None:
+                compact_entries.append(
+                    {"Short Description": f"{entry['tool']} sample", "Content": entry["compressed"]}
+                )
+
+        raw_unique_entries = []
+        compact_unique_entries = []
+        for key, raw_text in first_raw_by_key.items():
+            raw_unique_entries.append({"Short Description": f"{key} sample", "Content": raw_text})
+        for key, compressed in first_compact_by_key.items():
+            compact_unique_entries.append({"Short Description": f"{key} sample", "Content": compressed})
+
+        raw_tokens = _count_tokens(_serialize_compact(raw_entries), encoder) if raw_entries else None
+        compressed_tokens = (
+            _count_tokens(_serialize_compact(compact_entries), encoder) if compact_entries else None
+        )
+        raw_unique_tokens = (
+            _count_tokens(_serialize_compact(raw_unique_entries), encoder)
+            if raw_unique_entries
+            else None
+        )
+        compressed_unique_tokens = (
+            _count_tokens(_serialize_compact(compact_unique_entries), encoder)
+            if compact_unique_entries
+            else None
+        )
+
+        reduction = None
+        if raw_tokens:
+            reduction = (raw_tokens - (compressed_tokens or 0)) / raw_tokens
+
+        duplicate_savings = None
+        if compressed_tokens:
+            duplicate_savings = (compressed_tokens - (compressed_unique_tokens or 0)) / compressed_tokens
+
+        summary = {
+            "index": index,
+            "cache_hits": self.token_audit_cache_hits,
+            "cache_misses": self.token_audit_cache_misses,
+            "notebook_tokens": {
+                "raw_tokens": raw_tokens,
+                "compressed_tokens": compressed_tokens,
+                "reduction": reduction,
+                "compressed_duplicate_savings": duplicate_savings,
+            },
+            "entries": [
+                {
+                    "tool": entry["tool"],
+                    "action_arg": entry["action_arg"],
+                    "cached": entry["cached"],
+                }
+                for entry in entries
+            ],
+        }
+        (out_dir / f"token_audit_{index}.json").write_text(json.dumps(summary, indent=2))
+
 
     def load_tools(self, tools: List[str], planner_model_name=None) -> Dict[str, Any]:
         tools_map = {}
@@ -717,9 +882,98 @@ class ReactAgent:
 gpt2_enc = tiktoken.encoding_for_model("text-davinci-003")
 
 
+def _get_audit_encoder():
+    try:
+        return tiktoken.encoding_for_model("gpt-3.5-turbo")
+    except Exception:
+        return None
+
+
+def _count_tokens(text: str, encoder) -> int:
+    if encoder is None:
+        return len(text.encode("utf-8"))
+    return len(encoder.encode(text))
+
+
+def _serialize_compact(data) -> str:
+    return json.dumps(data, ensure_ascii=True, separators=(",", ":"))
+
+
+def _parse_env_int(name: str, default: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _append_constraint_policy(text: str, policy_text: str | None) -> str:
+    if not policy_text:
+        return text
+    if "Constraint policy" in text:
+        return text
+    return f"{text}\n\n{policy_text}"
+
+
+_DATE_PATTERN = re.compile(r"\\d{4}-\\d{2}-\\d{2}")
+
+
+def _summarize_content(content) -> str:
+    if isinstance(content, list):
+        preview = content[:1]
+        return f"[summary] {len(content)} items; first: {preview}"
+    if isinstance(content, dict):
+        return f"[summary] keys={list(content.keys())}"
+    text = str(content)
+    return f"[summary] {text[:200]}"
+
+
+def _summarize_entry(entry: dict) -> dict:
+    return {
+        "index": entry.get("index"),
+        "Short Description": entry.get("Short Description"),
+        "Content": _summarize_content(entry.get("Content")),
+    }
+
+
+def _prune_notebook_entries(
+    entries: list,
+    query_item: dict | None,
+    keep_days: int,
+    *,
+    keep_undated: bool,
+    summarize: bool,
+) -> list:
+    if not query_item or keep_days <= 0:
+        return entries
+    dates = query_item.get("date") or []
+    if isinstance(dates, str):
+        dates = [dates]
+    if not isinstance(dates, list) or not dates:
+        return entries
+    keep_dates = set(dates[-keep_days:])
+    pruned = []
+    for entry in entries:
+        entry_text = _serialize_compact(entry)
+        entry_dates = set(_DATE_PATTERN.findall(entry_text))
+        if entry_dates & keep_dates:
+            pruned.append(entry)
+            continue
+        if not entry_dates and keep_undated:
+            pruned.append(entry)
+            continue
+        if summarize:
+            pruned.append(_summarize_entry(entry))
+    return pruned
+
+
 def parse_action(string):
+    cleaned = string.strip()
+    cleaned = re.sub(r'^Action\s*\d*\s*:\s*', '', cleaned, flags=re.IGNORECASE)
     pattern = r'^(\w+)\[(.+)\]$'
-    match = re.match(pattern, string)
+    match = re.match(pattern, cleaned)
 
     try:
         if match:
@@ -841,6 +1095,19 @@ if __name__ == '__main__':
     parser.add_argument("--start_idx", type=int, default=1)
     parser.add_argument("--max_items", type=int, default=None)
     args = parser.parse_args()
+    if "SMT_PLANNER_SET_TYPE" not in os.environ:
+        os.environ["SMT_PLANNER_SET_TYPE"] = args.set_type
+    if "SMT_PLANNER_OUTPUT_ROOT" not in os.environ:
+        os.environ["SMT_PLANNER_OUTPUT_ROOT"] = os.path.join(args.output_dir, "smt_planner")
+    if "TOKEN_AUDIT_OUT_DIR" not in os.environ:
+        os.environ["TOKEN_AUDIT_OUT_DIR"] = os.path.join(args.output_dir, "token_audit")
+    if "TOKEN_AUDIT_SET_TYPE" not in os.environ:
+        os.environ["TOKEN_AUDIT_SET_TYPE"] = args.set_type
+    if (
+        os.environ.get("PLANNER_BACKEND", "").lower() == "smt"
+        and "SMT_PLANNER_FULL_DB" not in os.environ
+    ):
+        os.environ["SMT_PLANNER_FULL_DB"] = "1"
     # Use reuse_cache_if_exists to avoid downloading script if data is already cached
     if args.set_type == 'validation':
         query_data_list  = load_dataset('osunlp/TravelPlanner','validation', download_mode='reuse_cache_if_exists')['validation']
@@ -868,7 +1135,11 @@ if __name__ == '__main__':
                 json.dump(profile, f, indent=2)
 
             while True:
-                planner_results, scratchpad, action_log  = agent.run(query, query_item=query_item)
+                planner_results, scratchpad, action_log  = agent.run(
+                    query,
+                    query_item=query_item,
+                    query_index=number,
+                )
                 if planner_results != None:
                     break
             
