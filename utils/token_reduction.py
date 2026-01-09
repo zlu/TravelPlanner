@@ -1,3 +1,6 @@
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pandas import DataFrame
@@ -44,6 +47,33 @@ TOOL_MAX_ROWS: Dict[str, int] = {
     "restaurants": 30,
     "attractions": 30,
 }
+
+
+def _apply_allowlist_override() -> None:
+    override = None
+    raw = os.getenv("TOOL_COLUMN_ALLOWLIST")
+    path = os.getenv("TOOL_COLUMN_ALLOWLIST_PATH")
+    if raw:
+        try:
+            override = json.loads(raw)
+        except json.JSONDecodeError:
+            override = None
+    elif path:
+        try:
+            override = json.loads(Path(path).read_text())
+        except Exception:
+            override = None
+    if not isinstance(override, dict):
+        return
+    mode = os.getenv("TOOL_COLUMN_ALLOWLIST_MODE", "merge").lower()
+    if mode == "replace":
+        TOOL_COLUMN_ALLOWLIST.clear()
+    for tool, columns in override.items():
+        if isinstance(columns, list):
+            TOOL_COLUMN_ALLOWLIST[tool] = columns
+
+
+_apply_allowlist_override()
 
 
 def compress_tool_output(tool_name: str, data: Any, max_rows: Optional[int] = None) -> Any:
