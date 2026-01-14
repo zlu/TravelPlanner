@@ -21,16 +21,25 @@ if __name__ == '__main__':
         suffix = f'_{args.strategy}'
     data = build_plan_format_conversion_prompt(directory=args.output_dir, set_type=args.set_type, model_name=args.model_name, strategy=args.strategy,mode=args.mode)
     output_file = f'{args.tmp_dir}/{args.set_type}_{args.model_name}{suffix}_{args.mode}.txt'
+    try:
+        open(output_file, "w", encoding="utf-8").close()
+    except Exception:
+        pass
 
     total_price = 0
     for idx, prompt in enumerate(tqdm(data)):
         if prompt == "":
             with open(output_file, 'a+', encoding='utf-8') as f:
-                assistant_output = str(idx)
-                f.write(assistant_output + '\n')
+                f.write("\n")
             continue
-        results, _, price = prompt_chatgpt("You are a helpful assistant.", index=idx, save_path=output_file,
-                                           user_input=prompt, model_name='gpt-4-1106-preview', temperature=0)
+        results, _, price = prompt_chatgpt(
+            "You are a helpful assistant.",
+            index=idx,
+            save_path=output_file,
+            user_input=prompt,
+            model_name=args.model_name,
+            temperature=0,
+        )
         total_price += price
         
     print(f"Parsing Cost:${total_price}")

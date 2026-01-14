@@ -1,11 +1,20 @@
 import sys
+import ast
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from langchain.prompts import PromptTemplate
-from agents.prompts import planner_agent_prompt, cot_planner_agent_prompt, react_planner_agent_prompt,reflect_prompt,react_reflect_planner_agent_prompt, REFLECTION_HEADER
+from agents.prompts import (
+    planner_agent_prompt,
+    planner_json_prompt,
+    cot_planner_agent_prompt,
+    react_planner_agent_prompt,
+    reflect_prompt,
+    react_reflect_planner_agent_prompt,
+    REFLECTION_HEADER,
+)
 from langchain_community.chat_models import ChatOpenAI, ChatOllama
 from langchain.llms.base import BaseLLM
 from langchain.schema import (
@@ -29,11 +38,33 @@ GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 PLANNER_CONTEXT_WINDOW_DAYS = os.environ.get('PLANNER_CONTEXT_WINDOW_DAYS')
 PLANNER_BACKEND = os.environ.get("PLANNER_BACKEND", "llm").lower()
+PLANNER_OUTPUT_FORMAT = os.environ.get("PLANNER_OUTPUT_FORMAT", "text").lower()
 
 
 def _load_smt_runner():
     from tools.hybrid_two_stage_smt import run_single_query
     return run_single_query
+
+
+def _normalize_query_json(query_json: dict | None) -> dict | None:
+    if query_json is None:
+        return None
+    normalized = dict(query_json)
+    dates = normalized.get("date", [])
+    if isinstance(dates, str):
+        try:
+            dates = ast.literal_eval(dates)
+        except Exception:
+            dates = [dates]
+    normalized["date"] = dates
+    local_constraint = normalized.get("local_constraint")
+    if isinstance(local_constraint, str):
+        try:
+            local_constraint = ast.literal_eval(local_constraint)
+        except Exception:
+            pass
+    normalized["local_constraint"] = local_constraint
+    return normalized
 
 
 class SmtPlanner:
@@ -66,6 +97,7 @@ class SmtPlanner:
                 "local_constraint": query_item.get("local_constraint"),
                 "budget": query_item["budget"],
             }
+            query_json = _normalize_query_json(query_json)
         result = run_single_query(
             smt_query,
             query_json,
@@ -120,7 +152,10 @@ class Planner:
                  model_name: str = 'gpt-3.5-turbo-1106',
                  ) -> None:
 
-        self.agent_prompt = agent_prompt
+        if PLANNER_OUTPUT_FORMAT == "json":
+            self.agent_prompt = planner_json_prompt
+        else:
+            self.agent_prompt = agent_prompt
         self.scratchpad: str = ''
         self.model_name = model_name
         self.backend = PLANNER_BACKEND

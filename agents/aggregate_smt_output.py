@@ -15,6 +15,14 @@ def parse_plan(plan_text: str, query_json: dict):
     """
     Parse plan.txt into per-day plan list as expected by eval.py.
     """
+    dates_field = query_json.get("date", [])
+    if isinstance(dates_field, str):
+        try:
+            dates_field = ast.literal_eval(dates_field)
+        except Exception:
+            dates_field = [dates_field]
+    query_json = dict(query_json)
+    query_json["date"] = dates_field
     lines = [ln.strip() for ln in plan_text.strip().split("\n") if ln.strip()]
     if len(lines) < 6:
         return []

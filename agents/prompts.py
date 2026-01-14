@@ -99,6 +99,39 @@ Given information: {text}
 Query: {query}
 Travel Plan:"""
 
+PLANNER_JSON_INSTRUCTION = """You are a proficient planner. Based on the provided information and query, produce a JSON list of day plans. All information must come from the provided data. Output JSON only (no extra text). Each item must include:
+["days","current_city","transportation","breakfast","attraction","lunch","dinner","accommodation"].
+Use '-' when information is unnecessary. When traveling between cities on a day, set current_city to "from A to B".
+
+***** Example *****
+[
+  {{
+    "days": 1,
+    "current_city": "from Ithaca to Charlotte",
+    "transportation": "Flight Number: F3633413, from Ithaca to Charlotte, Departure Time: 05:38, Arrival Time: 07:46",
+    "breakfast": "Nagaland's Kitchen, Charlotte",
+    "attraction": "The Charlotte Museum of History, Charlotte",
+    "lunch": "Cafe Maple Street, Charlotte",
+    "dinner": "Bombay Vada Pav, Charlotte",
+    "accommodation": "Affordable Spacious Refurbished Room in Bushwick!, Charlotte"
+  }},
+  {{
+    "days": 2,
+    "current_city": "Charlotte",
+    "transportation": "-",
+    "breakfast": "Olive Tree Cafe, Charlotte",
+    "attraction": "The Mint Museum, Charlotte;Romare Bearden Park, Charlotte.",
+    "lunch": "Birbal Ji Dhaba, Charlotte",
+    "dinner": "Pind Balluchi, Charlotte",
+    "accommodation": "Affordable Spacious Refurbished Room in Bushwick!, Charlotte"
+  }}
+]
+***** Example Ends *****
+
+Given information: {text}
+Query: {query}
+JSON:"""
+
 COT_PLANNER_INSTRUCTION = """You are a proficient planner. Based on the provided information and query, please give me a detailed plan, including specifics such as flight numbers (e.g., F0123456), restaurant names, and hotel names. Note that all the information in your plan should be derived from the provided data. You must adhere to the format given in the example. Additionally, all details should align with common sense. Attraction visits and meals are expected to be diverse. The symbol '-' indicates that information is unnecessary. For example, in the provided sample, you do not need to plan after returning to the departure city. When you travel to two cities in one day, you should note it in the 'Current City' section as in the example (i.e., from A to B). 
 
 ***** Example *****
@@ -229,6 +262,11 @@ Query: {query}{scratchpad} """
 planner_agent_prompt = PromptTemplate(
                         input_variables=["text","query"],
                         template = PLANNER_INSTRUCTION,
+                        )
+
+planner_json_prompt = PromptTemplate(
+                        input_variables=["text","query"],
+                        template = PLANNER_JSON_INSTRUCTION,
                         )
 
 cot_planner_agent_prompt = PromptTemplate(

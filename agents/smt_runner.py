@@ -14,7 +14,7 @@ import types
 from dotenv import load_dotenv
 from pathlib import Path
 from datasets import load_dataset
-from typing import Optional, List
+from typing import Optional, List, Dict
 import json
 
 # Minimal OpenAI shim if the package is unavailable.
@@ -203,10 +203,27 @@ def _shim_optional_dependencies():
         )
 
 
-def _patch_data_paths(data_root: Path, max_city_candidates: Optional[int] = None):
+def _patch_data_paths(
+    data_root: Path,
+    max_city_candidates: Optional[int] = None,
+    search_limits: Optional[Dict[str, int]] = None,
+):
     """
     Force upstream tool loaders to read from our TravelPlanner database directory.
+    
+    Also applies search space limits to prevent combinatorial explosion for
+    multi-day, multi-city queries.
+    
+    Args:
+        data_root: Path to database directory
+        max_city_candidates: Legacy limit for cities (now uses search_limits)
+        search_limits: Dict with keys like 'restaurants_per_city', 'attractions_per_city', etc.
     """
+    # Merge legacy parameter with new limits
+    limits = search_limits or {}
+    if max_city_candidates and 'cities' not in limits:
+        limits['cities'] = max_city_candidates
+    
     try:
         import tools.cities.apis as cities
         orig_cities_init = cities.Cities.__init__
@@ -216,12 +233,9 @@ def _patch_data_paths(data_root: Path, max_city_candidates: Optional[int] = None
             return orig_cities_init(self, path=path)
         def cities_run(self, state, *args, **kwargs):
             result = orig_cities_run(self, state, *args, **kwargs)
-            if (
-                max_city_candidates
-                and isinstance(result, list)
-                and len(result) > max_city_candidates
-            ):
-                return result[:max_city_candidates]
+            city_limit = limits.get('cities')
+            if city_limit and isinstance(result, list) and len(result) > city_limit:
+                return result[:city_limit]
             return result
         cities.Cities.__init__ = cities_init
         cities.Cities.run = cities_run
@@ -231,40 +245,97 @@ def _patch_data_paths(data_root: Path, max_city_candidates: Optional[int] = None
     try:
         import tools.accommodations.apis as accommodations
         orig_acc_init = accommodations.Accommodations.__init__
+        orig_acc_run = getattr(accommodations.Accommodations, 'run', None)
         def acc_init(self, path=None):
             path = str(data_root / "accommodations/clean_accommodations_2022.csv")
             return orig_acc_init(self, path=path)
         accommodations.Accommodations.__init__ = acc_init
+        
+        # Add result limiting if run method exists
+        if orig_acc_run:
+            def acc_run(self, *args, **kwargs):
+                result = orig_acc_run(self, *args, **kwargs)
+                limit = limits.get('accommodations_per_city', limits.get('accommodations'))
+                if limit and hasattr(result, '__len__') and len(result) > limit:
+                    # Try to sort by rating first
+                    if hasattr(result, 'sort_values'):  # DataFrame
+                        result = result.sort_values('rating', ascending=False).head(limit)
+                    elif isinstance(result, list):
+                        result = result[:limit]
+                return result
+            accommodations.Accommodations.run = acc_run
     except Exception:
         pass
 
     try:
         import tools.restaurants.apis as restaurants
         orig_rest_init = restaurants.Restaurants.__init__
+        orig_rest_run = getattr(restaurants.Restaurants, 'run', None)
         def rest_init(self, path=None):
             path = str(data_root / "restaurants/clean_restaurant_2022.csv")
             return orig_rest_init(self, path=path)
         restaurants.Restaurants.__init__ = rest_init
+        
+        # Add result limiting
+        if orig_rest_run:
+            def rest_run(self, *args, **kwargs):
+                result = orig_rest_run(self, *args, **kwargs)
+                limit = limits.get('restaurants_per_city', limits.get('restaurants'))
+                if limit and hasattr(result, '__len__') and len(result) > limit:
+                    if hasattr(result, 'sort_values'):
+                        result = result.sort_values('rating', ascending=False).head(limit)
+                    elif isinstance(result, list):
+                        result = result[:limit]
+                return result
+            restaurants.Restaurants.run = rest_run
     except Exception:
         pass
 
     try:
         import tools.flights.apis as flights
         orig_flights_init = flights.Flights.__init__
+        orig_flights_run = getattr(flights.Flights, 'run', None)
         def flights_init(self, path=None):
             path = str(data_root / "flights/clean_Flights_2022.csv")
             return orig_flights_init(self, path=path)
         flights.Flights.__init__ = flights_init
+        
+        # Add result limiting
+        if orig_flights_run:
+            def flights_run(self, *args, **kwargs):
+                result = orig_flights_run(self, *args, **kwargs)
+                limit = limits.get('flights_per_route', limits.get('flights'))
+                if limit and hasattr(result, '__len__') and len(result) > limit:
+                    if hasattr(result, 'sort_values'):
+                        result = result.sort_values('Price', ascending=True).head(limit)
+                    elif isinstance(result, list):
+                        result = result[:limit]
+                return result
+            flights.Flights.run = flights_run
     except Exception:
         pass
 
     try:
         import tools.attractions.apis as attractions
         orig_attr_init = attractions.Attractions.__init__
+        orig_attr_run = getattr(attractions.Attractions, 'run', None)
         def attr_init(self, path=None):
             path = str(data_root / "attractions/attractions.csv")
             return orig_attr_init(self, path=path)
         attractions.Attractions.__init__ = attr_init
+        
+        # Add result limiting
+        if orig_attr_run:
+            def attr_run(self, *args, **kwargs):
+                result = orig_attr_run(self, *args, **kwargs)
+                limit = limits.get('attractions_per_city', limits.get('attractions'))
+                if limit and hasattr(result, '__len__') and len(result) > limit:
+                    if hasattr(result, 'sort_values'):
+                        result = result.head(limit)  # Attractions may not have rating
+                    elif isinstance(result, list):
+                        result = result[:limit]
+                return result
+            attractions.Attractions.run = attr_run
     except Exception:
         pass
 
@@ -374,7 +445,17 @@ def run_smt(
     skip_existing: bool = True,
     start_idx: int = 1,
     max_city_candidates: Optional[int] = None,
+    search_limits: Optional[Dict[str, int]] = None,
+    use_adaptive_limits: bool = True,
 ):
+    """
+    Run SMT-based TravelPlanner pipeline.
+    
+    Args:
+        use_adaptive_limits: If True, automatically compute search space limits
+                           based on query complexity (days, cities, constraints).
+                           This helps prevent timeouts for large queries.
+    """
     # Resolve SMT repo location: CLI arg > env > common sibling defaults.
     if smt_repo:
         repo_root = Path(smt_repo)
@@ -401,10 +482,48 @@ def run_smt(
     module = _load_formal_module(repo_root)
     # Ensure data files resolve from this repo's database folder.
     data_root = Path(__file__).resolve().parents[1] / "database"
-    _patch_data_paths(data_root, max_city_candidates)
+    
+    # Initial search limits - will be updated per-query if adaptive
+    base_limits = search_limits or {}
+    _patch_data_paths(data_root, max_city_candidates, base_limits)
     _maybe_patch_deepseek(module)
 
     dataset = _load_queries(set_type, dataset_path)
+    
+    # Helper to compute adaptive limits for a query
+    def _get_adaptive_limits(query_item: dict) -> Dict[str, int]:
+        """Compute search space limits based on query complexity."""
+        days = int(query_item.get("days", 3))
+        cities = int(query_item.get("visiting_city_number", 1))
+        
+        # Check if query has narrowing constraints
+        local = query_item.get("local_constraint", {})
+        if isinstance(local, str):
+            try:
+                import ast
+                local = ast.literal_eval(local)
+            except:
+                local = {}
+        
+        has_constraints = any(local.get(k) for k in ["cuisine", "room type", "transportation"])
+        
+        # Base limits
+        limits = {
+            "restaurants_per_city": 20,
+            "attractions_per_city": 25,
+            "accommodations_per_city": 15,
+            "flights_per_route": 8,
+            "cities": 8,
+        }
+        
+        # Apply scaling for complex queries (7+ days, 3+ cities)
+        if days >= 7 or (days >= 5 and cities >= 3):
+            scale = 0.5 if not has_constraints else 0.7
+            limits = {k: max(5, int(v * scale)) for k, v in limits.items()}
+            print(f"[adaptive] Complex query ({days}d, {cities}c, constraints={has_constraints}): "
+                  f"limits scaled to {limits}")
+        
+        return limits
 
     repo_root_path = Path(__file__).resolve().parents[1]
     output_base = (
@@ -482,16 +601,66 @@ def run_smt(
         path = str(output_root) + "/"
 
         try:
-            if model == "gpt":
-                print(f"[{index}] query_to_json start")
-                raw = module.GPT_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n", model_version)
-                print(f"[{index}] query_to_json done")
-            elif model == "claude":
-                raw = module.Claude_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n")
-            elif model == "mixtral":
-                raw = module.Mixtral_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n", "json")
-            else:
-                raise ValueError(f"Unsupported model {model}")
+            combine_query_steps = os.getenv("COMBINE_QUERY_STEPS", "0") == "1"
+            
+            if combine_query_steps:
+                # Combined call: query_to_json + constraint_to_step in ONE LLM call
+                combined_prompt = (
+                    "You will perform TWO tasks for the same travel query.\n\n"
+                    "=== TASK 1: Extract JSON ===\n"
+                    f"{query_to_json_prompt}"
+                    f"{{{{ {query} }}}}\n"
+                    "Output the JSON between markers:\n"
+                    "########## JSON ##########\n<json>\n########## JSON ENDS ##########\n\n"
+                    "=== TASK 2: Generate Planning Steps ===\n"
+                    f"{constraint_to_step_prompt}{query}\n"
+                    "Output the steps between markers:\n"
+                    "########## STEPS ##########\n<steps>\n########## STEPS ENDS ##########\n"
+                )
+                
+                print(f"[{index}] combined_query_steps start")
+                start = time.time()
+                if model == "gpt":
+                    combined_raw = module.GPT_response(combined_prompt, model_version)
+                elif model == "claude":
+                    combined_raw = module.Claude_response(combined_prompt)
+                elif model == "mixtral":
+                    combined_raw = module.Mixtral_response(combined_prompt, "json")
+                else:
+                    raise ValueError(f"Unsupported model {model}")
+                print(f"[{index}] combined_query_steps done")
+                times.append(time.time() - start)
+                
+                # Extract JSON section
+                def extract_between(text, start_marker, end_marker):
+                    if start_marker in text and end_marker in text:
+                        return text.split(start_marker, 1)[1].split(end_marker, 1)[0].strip()
+                    return ""
+                
+                raw = extract_between(combined_raw, "########## JSON ##########", "########## JSON ENDS ##########")
+                steps_text = extract_between(combined_raw, "########## STEPS ##########", "########## STEPS ENDS ##########")
+                
+                # Fallback if markers not found
+                if not raw or not steps_text:
+                    print(f"[{index}] combined_query_steps markers not found, falling back to separate calls")
+                    combine_query_steps = False
+                    
+                # Save combined output for debugging
+                with open(output_root / "plans" / "combined_response.txt", "w") as f:
+                    f.write(combined_raw)
+            
+            if not combine_query_steps:
+                # Separate calls (original behavior)
+                if model == "gpt":
+                    print(f"[{index}] query_to_json start")
+                    raw = module.GPT_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n", model_version)
+                    print(f"[{index}] query_to_json done")
+                elif model == "claude":
+                    raw = module.Claude_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n")
+                elif model == "mixtral":
+                    raw = module.Mixtral_response(query_to_json_prompt + "{" + query + "}\n" + "JSON:\n", "json")
+                else:
+                    raise ValueError(f"Unsupported model {model}")
 
             cleaned = raw.replace("```json", "").replace("```", "").strip()
             if cleaned.startswith("{") and cleaned.endswith("}"):
@@ -510,18 +679,19 @@ def run_smt(
             with open(output_root / "plans" / "query.json", "w") as f:
                 json.dump(query_json, f)
 
-            start = time.time()
-            if model == "gpt":
-                print(f"[{index}] constraint_to_step start")
-                steps_text = module.GPT_response(constraint_to_step_prompt + query + "\n" + "Steps:\n", model_version)
-                print(f"[{index}] constraint_to_step done")
-            elif model == "claude":
-                steps_text = module.Claude_response(constraint_to_step_prompt + query + "\n" + "Steps:\n")
-            elif model == "mixtral":
-                steps_text = module.Mixtral_response(constraint_to_step_prompt + query + "\n" + "Steps:\n")
-            else:
-                raise ValueError(f"Unsupported model {model}")
-            times.append(time.time() - start)
+            if not combine_query_steps:
+                start = time.time()
+                if model == "gpt":
+                    print(f"[{index}] constraint_to_step start")
+                    steps_text = module.GPT_response(constraint_to_step_prompt + query + "\n" + "Steps:\n", model_version)
+                    print(f"[{index}] constraint_to_step done")
+                elif model == "claude":
+                    steps_text = module.Claude_response(constraint_to_step_prompt + query + "\n" + "Steps:\n")
+                elif model == "mixtral":
+                    steps_text = module.Mixtral_response(constraint_to_step_prompt + query + "\n" + "Steps:\n")
+                else:
+                    raise ValueError(f"Unsupported model {model}")
+                times.append(time.time() - start)
 
             with open(output_root / "plans" / "steps.txt", "w") as f:
                 f.write(steps_text)
@@ -733,7 +903,15 @@ def run_smt(
             out_dir = output_base / set_type / "gpt_nl" / str(idx + 1) / "plans" / "plan.txt"
             if skip_existing and out_dir.exists():
                 continue
-            query = dataset[idx]["query"]
+            
+            query_item = dataset[idx]
+            query = query_item["query"]
+            
+            # Apply adaptive limits for this specific query
+            if use_adaptive_limits:
+                adaptive_limits = _get_adaptive_limits(query_item)
+                _patch_data_paths(data_root, None, adaptive_limits)
+            
             # The upstream pipeline only branches on model in {'gpt','claude','mixtral'}.
             # We pass 'gpt' here to use GPT_response, which we have already patched to DeepSeek.
             pipeline_model = "gpt"

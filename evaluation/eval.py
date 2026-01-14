@@ -52,10 +52,13 @@ def paper_term_mapping(commonsense_constraint_record, hard_constraint_record):
 
 def eval_score(set_type: str, file_path: str):
 
+    download_mode = os.getenv("DATASET_DOWNLOAD_MODE", "reuse_cache_if_exists")
     if set_type == 'train':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','train',download_mode="force_redownload")['train']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','train',download_mode=download_mode)['train']
     elif set_type == 'validation':
-        query_data_list  = load_dataset('osunlp/TravelPlanner','validation',download_mode="force_redownload")['validation']
+        query_data_list  = load_dataset('osunlp/TravelPlanner','validation',download_mode=download_mode)['validation']
+    elif set_type == 'test':
+        query_data_list  = load_dataset('osunlp/TravelPlanner','test',download_mode=download_mode)['test']
 
     
     query_data_list = [x for x in query_data_list]

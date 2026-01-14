@@ -31,9 +31,12 @@ from langchain.schema import (
 )
 from prompts import zeroshot_react_agent_prompt
 from utils.func import load_line_json_data, save_file
+from utils.path_utils import normalize_output_dir
 from utils.token_reduction import compress_tool_output, summarize_tool_output
 from utils.user_profile import build_user_profile, format_profile
 from utils.constraint_policy import build_constraint_policy, format_constraint_policy
+from tools.planner.apis import SmtPlanner
+from agents.aggregate_smt_output import parse_plan as parse_smt_plan
 import sys
 import json
 import openai
@@ -1001,6 +1004,58 @@ def truncate_scratchpad(scratchpad: str, n_tokens: int = 1600, tokenizer=gpt2_en
     return '\n'.join(lines)
 
 
+def _maybe_parse_plan_json(text: str):
+    if not isinstance(text, str):
+        return None
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    if not cleaned or cleaned[0] not in "[{":
+        return None
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        return None
+
+
+def _maybe_parse_smt_plan(text: str, query_item: dict | None):
+    if not isinstance(text, str):
+        return None
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("SMT solver") or cleaned.startswith("SMT planner"):
+        return None
+    if not query_item:
+        return None
+    query_json = {
+        "org": query_item["org"],
+        "dest": query_item["dest"],
+        "days": query_item["days"],
+        "visiting_city_number": query_item["visiting_city_number"],
+        "date": query_item["date"],
+        "people_number": query_item["people_number"],
+        "local_constraint": query_item.get("local_constraint"),
+        "budget": query_item["budget"],
+    }
+    try:
+        return parse_smt_plan(cleaned, query_json)
+    except Exception:
+        return None
+
+
+def _read_json_safely(path: str):
+    raw = Path(path).read_text(encoding="utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(raw)
+        return obj
+
+
 def normalize_answer(s):
     def remove_articles(text):
         return re.sub(r"\b(a|an|the|usd)\b", " ", text)
@@ -1095,6 +1150,9 @@ if __name__ == '__main__':
     parser.add_argument("--start_idx", type=int, default=1)
     parser.add_argument("--max_items", type=int, default=None)
     args = parser.parse_args()
+    args.output_dir = normalize_output_dir(args.output_dir, base_dir=REPO_ROOT)
+    smt_enabled = os.getenv("TWO_STAGE_SMT", "0") == "1"
+    smt_only = os.getenv("TWO_STAGE_SMT_ONLY", "0") == "1"
     if "SMT_PLANNER_SET_TYPE" not in os.environ:
         os.environ["SMT_PLANNER_SET_TYPE"] = args.set_type
     if "SMT_PLANNER_OUTPUT_ROOT" not in os.environ:
@@ -1103,6 +1161,7 @@ if __name__ == '__main__':
         os.environ["TOKEN_AUDIT_OUT_DIR"] = os.path.join(args.output_dir, "token_audit")
     if "TOKEN_AUDIT_SET_TYPE" not in os.environ:
         os.environ["TOKEN_AUDIT_SET_TYPE"] = args.set_type
+    smt_planner = SmtPlanner(model_name=args.model_name) if (smt_enabled or smt_only) else None
     if (
         os.environ.get("PLANNER_BACKEND", "").lower() == "smt"
         and "SMT_PLANNER_FULL_DB" not in os.environ
@@ -1128,11 +1187,27 @@ if __name__ == '__main__':
             if not os.path.exists(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json')):
                 result =  [{}]
             else:
-                result = json.load(open(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json')))
+                result = _read_json_safely(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json'))
                 
             profile = build_user_profile(query_item)
             with open(os.path.join(f'{args.output_dir}/{args.set_type}/user_profile_{number}.json'), 'w') as f:
                 json.dump(profile, f, indent=2)
+
+            if smt_planner is not None and smt_only:
+                smt_plan_text = smt_planner.run(
+                    "",
+                    query,
+                    query_item=query_item,
+                    query_index=number,
+                )
+                result[-1][f'{args.model_name}_two-stage_smt_results'] = smt_plan_text
+                result[-1][f'{args.model_name}_two-stage_smt_parsed_results'] = _maybe_parse_smt_plan(
+                    smt_plan_text, query_item
+                )
+                result[-1]['user_profile'] = profile
+                with open(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json'), 'w') as f:
+                    json.dump(result, f, indent=4)
+                continue
 
             while True:
                 planner_results, scratchpad, action_log  = agent.run(
@@ -1153,6 +1228,21 @@ if __name__ == '__main__':
                 result[-1][f'{args.model_name}_two-stage_results'] = planner_results
                 result[-1][f'{args.model_name}_two-stage_action_logs'] = action_log
                 result[-1]['user_profile'] = profile
+                if os.getenv("PLANNER_OUTPUT_FORMAT", "").lower() == "json":
+                    parsed = _maybe_parse_plan_json(planner_results)
+                    if parsed is not None:
+                        result[-1][f'{args.model_name}_two-stage_parsed_results'] = parsed
+                if smt_planner is not None:
+                    smt_plan_text = smt_planner.run(
+                        "",
+                        query,
+                        query_item=query_item,
+                        query_index=number,
+                    )
+                    result[-1][f'{args.model_name}_two-stage_smt_results'] = smt_plan_text
+                    result[-1][f'{args.model_name}_two-stage_smt_parsed_results'] = _maybe_parse_smt_plan(
+                        smt_plan_text, query_item
+                    )
 
             # write to json file
             with open(os.path.join(f'{args.output_dir}/{args.set_type}/generated_plan_{number}.json'), 'w') as f:

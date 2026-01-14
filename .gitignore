@@ -29,8 +29,21 @@ smt_output/**
 smt_token_output/**
 smt_aggregate_results.jsonl
 smt_padded.jsonl
+smt_aggregated.jsonl
+tools/token_delta_calc_tmp.py
 
 eval_result.txt
 validation_queries.json
 
 evaluation/**
+!evaluation/*.py
+INVOICE_SUMMARY.md
+work_proposal_cn copy.md
+.gitignore
+work_proposal_cn.md
+work_proposal_cn.pdf
+.gitignore
+.cache/hf/_Users_zlu_baidu-sync_projects_TravelPlanner_.cache_hf_osunlp___travel_planner_validation_0.0.0_8736504ecfc31b7f8b7e40122873c337e83fff7c.lock
+.cache/hf/osunlp___travel_planner/validation/0.0.0/8736504ecfc31b7f8b7e40122873c337e83fff7c_builder.lock
+.cache/hf/osunlp___travel_planner/validation/0.0.0/8736504ecfc31b7f8b7e40122873c337e83fff7c.incomplete_info.lock
+.cache/hf/osunlp___travel_planner/validation/0.0.0/8736504ecfc31b7f8b7e40122873c337e83fff7c/travel_planner-validation.arrow

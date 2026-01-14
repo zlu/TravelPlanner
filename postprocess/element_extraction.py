@@ -1,4 +1,5 @@
 import argparse
+import os
 from datasets import load_dataset
 from tqdm import tqdm
 import json
@@ -34,21 +35,48 @@ if __name__ == '__main__':
 
     idx_number_list = [i for i in range(1,len(query_data_list)+1)]
     for idx in tqdm(idx_number_list[:]):
-        generated_plan = json.load(open(f'{args.output_dir}/{args.set_type}/generated_plan_{idx}.json'))
-        if generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_results'] not in ["","Max Token Length Exceeded."] :
+        plan_path = f'{args.output_dir}/{args.set_type}/generated_plan_{idx}.json'
+        if not os.path.exists(plan_path):
+            continue
+        generated_plan = json.load(open(plan_path))
+        results_key = f'{args.model_name}{suffix}_{args.mode}_results'
+        if results_key not in generated_plan[-1]:
+            candidates = [
+                key for key in generated_plan[-1].keys()
+                if key.endswith(f'{suffix}_{args.mode}_results')
+            ]
+            if not candidates:
+                candidates = [
+                    key for key in generated_plan[-1].keys()
+                    if key.endswith(f'_{args.mode}_results')
+                ]
+            if candidates:
+                results_key = candidates[0]
+        if generated_plan[-1].get(results_key) not in ["", "Max Token Length Exceeded."]:
             try:
-                result = results[idx-1].split('```json')[1].split('```')[0]
-            except:
-                print(f"{idx}:\n{results[idx-1]}\nThis plan cannot be parsed. The plan has to follow the format ```json [The generated json format plan]```(The common gpt-4-preview-1106 json format). Please modify it manualy when this occurs.")
-                break
+                raw_line = results[idx - 1]
+                if "```json" in raw_line:
+                    result = raw_line.split('```json')[1].split('```')[0]
+                else:
+                    result = raw_line
+                    if "\t" in result:
+                        result = result.split("\t", 1)[1]
+            except Exception:
+                print(f"{idx}:\n{results[idx-1]}\nThis plan cannot be parsed. Please check the format.")
+                result = None
             try:
+                if result is None:
+                    raise ValueError("Empty parse result.")
+                result = result.strip()
+                if not result or result.isdigit():
+                    raise ValueError("Non-plan placeholder.")
                 if args.mode == 'two-stage':
                     generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results'] = eval(result)
                 else:
                     generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results'] = eval(result)
-            except:
+            except Exception:
                 print(f"{idx}:\n{result}\n This is an illegal json format. Please modify it manualy when this occurs.")
-                break
+                generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results'] = None
         else:
             if args.mode == 'two-stage':
                 generated_plan[-1][f'{args.model_name}{suffix}_{args.mode}_parsed_results'] = None

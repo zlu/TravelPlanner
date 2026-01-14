@@ -1,4 +1,5 @@
 import argparse
+import ast
 import builtins
 import json
 import os
@@ -21,6 +22,13 @@ sys.path.append(str(REPO_ROOT))
 
 from agents.smt_runner import _load_formal_module, _maybe_patch_deepseek, _patch_data_paths, _shim_optional_dependencies
 from utils.user_profile import build_user_profile, format_profile
+from utils.smt_optimizer import (
+    configure_z3_solver,
+    get_recommended_timeout,
+    estimate_problem_complexity,
+    should_use_aggressive_pruning,
+    get_pruning_config,
+)
 
 
 _ENCODING = None
@@ -50,6 +58,7 @@ def _get_runtime(repo_root: Path) -> Dict[str, object]:
     module = _load_formal_module(repo_root)
     _maybe_patch_deepseek(module)
     _patch_generate_as_plan(module)
+    _patch_cities_run(module)
     _patch_steps_response(module)
 
     data_root = REPO_ROOT / "database"
@@ -105,6 +114,27 @@ def _build_prompt_query(query: str, query_json: dict | None) -> str:
     if mode == "core":
         return f"Core constraints (JSON): {profile_text}"
     return f"Core constraints (JSON): {profile_text}\nOriginal query: {query}"
+
+
+def _normalize_query_json(query_json: dict | None) -> dict | None:
+    if query_json is None:
+        return None
+    normalized = dict(query_json)
+    dates = normalized.get("date", [])
+    if isinstance(dates, str):
+        try:
+            dates = ast.literal_eval(dates)
+        except Exception:
+            dates = [dates]
+    normalized["date"] = dates
+    local_constraint = normalized.get("local_constraint")
+    if isinstance(local_constraint, str):
+        try:
+            local_constraint = ast.literal_eval(local_constraint)
+        except Exception:
+            pass
+    normalized["local_constraint"] = local_constraint
+    return normalized
 
 
 def load_state_city_map(path: Path) -> Dict[str, List[str]]:
@@ -320,6 +350,24 @@ def _patch_generate_as_plan(module):
     module.generate_as_plan = safe_generate_as_plan
 
 
+def _patch_cities_run(module) -> None:
+    if not hasattr(module, "Cities"):
+        return
+    original_run = module.Cities.run
+
+    def run_patched(self, *args, **kwargs):
+        if not args:
+            return original_run(self, *args, **kwargs)
+        data = getattr(self, "data", None)
+        if isinstance(data, dict):
+            for candidate in args:
+                if isinstance(candidate, str) and candidate in data:
+                    return original_run(self, candidate)
+        return original_run(self, args[0])
+
+    module.Cities.run = run_patched
+
+
 def _patch_steps_response(module):
     base_response = module.GPT_response
 
@@ -356,7 +404,16 @@ def build_filtered_database(
     distance_df: pd.DataFrame,
     state_city_map: Dict[str, List[str]],
     top_k_cities: int,
+    search_limits: Dict[str, int] | None = None,
 ) -> Dict[str, int]:
+    """
+    Build a filtered database for SMT solver.
+    
+    Args:
+        search_limits: Optional dict with keys like 'restaurants_per_city', 
+                      'attractions_per_city', 'accommodations_per_city', 'flights_per_route'
+                      to limit search space for large queries.
+    """
     org = query_json["org"]
     dest = query_json["dest"]
     days = int(query_json["days"])
@@ -393,6 +450,43 @@ def build_filtered_database(
     rest_filtered = safe_filter(restaurants_df, rest_mask, "restaurants")
     attr_filtered = safe_filter(attractions_df, attr_mask, "attractions")
     dist_filtered = safe_filter(distance_df, dist_mask, "distance")
+
+    # Apply search space limits to prevent combinatorial explosion for large queries
+    if search_limits:
+        # Limit restaurants per city
+        rest_limit = search_limits.get('restaurants_per_city')
+        if rest_limit and len(rest_filtered) > rest_limit * len(selected):
+            # Sort by rating (descending) and take top N per city
+            if 'Average Cost' in rest_filtered.columns:
+                rest_filtered = rest_filtered.sort_values('Average Cost', ascending=True)
+            rest_filtered = rest_filtered.groupby('City').head(rest_limit).reset_index(drop=True)
+            print(f"[adaptive] Limited restaurants to {len(rest_filtered)} (top {rest_limit}/city)")
+
+        # Limit accommodations per city
+        acc_limit = search_limits.get('accommodations_per_city')
+        if acc_limit and len(acc_filtered) > acc_limit * len(selected):
+            if 'rating' in acc_filtered.columns:
+                acc_filtered = acc_filtered.sort_values('rating', ascending=False)
+            acc_filtered = acc_filtered.groupby('city').head(acc_limit).reset_index(drop=True)
+            print(f"[adaptive] Limited accommodations to {len(acc_filtered)} (top {acc_limit}/city)")
+
+        # Limit attractions per city
+        attr_limit = search_limits.get('attractions_per_city')
+        if attr_limit and len(attr_filtered) > attr_limit * len(selected):
+            attr_filtered = attr_filtered.groupby('City').head(attr_limit).reset_index(drop=True)
+            print(f"[adaptive] Limited attractions to {len(attr_filtered)} (top {attr_limit}/city)")
+
+        # Limit flights per route
+        flight_limit = search_limits.get('flights_per_route')
+        if flight_limit and len(flights_filtered) > 0:
+            # Keep cheapest flights per route
+            if 'Price' in flights_filtered.columns:
+                flights_filtered = flights_filtered.sort_values('Price', ascending=True)
+            # Group by origin-dest-date
+            flights_filtered = flights_filtered.groupby(
+                ['OriginCityName', 'DestCityName', 'FlightDate']
+            ).head(flight_limit).reset_index(drop=True)
+            print(f"[adaptive] Limited flights to {len(flights_filtered)} (top {flight_limit}/route)")
 
     write_csv(data_root / "flights/clean_Flights_2022.csv", flights_filtered)
     write_csv(data_root / "accommodations/clean_accommodations_2022.csv", acc_filtered)
@@ -495,6 +589,12 @@ def _safe_pipeline(
     AccommodationSearch = module.Accommodations()
     RestaurantSearch = module.Restaurants()
     s = module.Optimize()
+    
+    # Configure Z3 solver with optimized parameters
+    configure_z3_solver(s)
+    complexity = estimate_problem_complexity(query_json) if query_json else "medium"
+    print(f"  Query complexity: {complexity}")
+    
     variables: dict = {}
     times: List[float] = []
     codes = ""
@@ -665,10 +765,18 @@ def run_single_query(
         query_json, query_tokens, token_kind = _parse_query_json(
             module, repo_root, query, model_version
         )
+    query_json = _normalize_query_json(query_json)
     prompt_query = _build_prompt_query(query, query_json)
 
+    # Compute adaptive search limits for complex queries
+    search_limits = None
+    if query_json and should_use_aggressive_pruning(query_json):
+        search_limits = get_pruning_config(query_json)
+        complexity = estimate_problem_complexity(query_json)
+        print(f"[{index}] Query complexity: {complexity}, using adaptive pruning: {search_limits}")
+
     if full_db:
-        _patch_data_paths(runtime["data_root"])
+        _patch_data_paths(runtime["data_root"], search_limits=search_limits)
     else:
         query_root = output_root / "filtered_db" / str(index) / "database"
         counts = build_filtered_database(
@@ -681,11 +789,12 @@ def run_single_query(
             runtime["distance_df"],
             runtime["state_city_map"],
             top_k_cities,
+            search_limits=search_limits,
         )
         (output_root / "filtered_db" / str(index) / "metadata.json").write_text(
             json.dumps(counts, indent=2)
         )
-        _patch_data_paths(query_root)
+        _patch_data_paths(query_root, search_limits=search_limits)
 
     _safe_pipeline(
         module,
@@ -761,6 +870,7 @@ def main():
     module = _load_formal_module(repo_root)
     _maybe_patch_deepseek(module)
     _patch_generate_as_plan(module)
+    _patch_cities_run(module)
     _patch_steps_response(module)
 
     start = args.start_idx
@@ -779,18 +889,20 @@ def main():
                 "local_constraint": item["local_constraint"],
                 "budget": item["budget"],
             }
+            query_json = _normalize_query_json(query_json)
             query_tokens = None
             token_kind = None
         else:
             cached = _load_cached_query_json(output_root, repo_root, args.set_type, idx)
             if cached:
-                query_json = cached
+                query_json = _normalize_query_json(cached)
                 query_tokens = None
                 token_kind = None
             else:
                 query_json, query_tokens, token_kind = _parse_query_json(
                     module, repo_root, query, "gpt-4o"
                 )
+                query_json = _normalize_query_json(query_json)
         prompt_query = _build_prompt_query(query, query_json)
 
         if args.full_db:

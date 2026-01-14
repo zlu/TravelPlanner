@@ -15,14 +15,13 @@ from datasets import load_dataset
 
 T = TypeVar('T')
 KEY_INDEX = 0
-KEY_POOL =  [
-   os.environ.get('OPENAI_API_KEY')
-]# your key pool
+KEY_POOL = [
+    os.environ.get('OPENAI_API_KEY')
+]  # your key pool
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
-if not KEY_POOL[0]:
-    raise ValueError("OPENAI_API_KEY is required. Please set it in your .env file.")
-openai.api_key = KEY_POOL[0]
+if KEY_POOL[0]:
+    openai.api_key = KEY_POOL[0]
 
 
 class TimeoutError(Exception):
@@ -32,9 +31,16 @@ def timeout_handler(signum, frame):
     raise TimeoutError("The function takes too long to run")
 
 @func_set_timeout(120)
-def limited_execution_time(func,model,prompt,temp,max_tokens=2048, default=None,**kwargs):
+def limited_execution_time(func, model, prompt, temp, max_tokens=2048, default=None, **kwargs):
     try:
-        if 'gpt-3.5-turbo' in model or 'gpt-4' in model:
+        model_name = (model or "").lower()
+        is_chat = (
+            'gpt-3.5-turbo' in model_name
+            or 'gpt-4' in model_name
+            or model_name.startswith('deepseek:')
+            or model_name.startswith('deepseek-')
+        )
+        if is_chat:
             result = func(
                     model=model,
                     messages=prompt,
@@ -156,6 +162,8 @@ def catch_openai_api_error(prompt_input: list):
 def prompt_gpt3(prompt_input: list, save_path,model_name='text-davinci-003', max_tokens=2048,
                 clean=False, batch_size=16, verbose=False, **kwargs):
     # return: output_list, money_cost
+    if not openai.api_key:
+        raise ValueError("OPENAI_API_KEY is required for OpenAI models. Please set it in your .env file.")
 
     def request_api(prompts: list):
         # prompts: list or str
@@ -200,6 +208,9 @@ def prompt_chatgpt(system_input, user_input, temperature,save_path,index,history
         openai.api_key = DEEPSEEK_API_KEY
         openai.api_base = DEEPSEEK_API_BASE
     
+    if not is_deepseek and not openai.api_key:
+        raise ValueError("OPENAI_API_KEY is required for OpenAI models. Please set it in your .env file.")
+
     if len(history) == 0:
         history = [{"role": "system", "content": system_input}]
     history.append({"role": "user", "content": user_input})
@@ -311,9 +322,24 @@ def build_plan_format_conversion_prompt(directory, set_type='validation',model_n
     elif mode == 'sole-planning':
         suffix = f'_{strategy}'
     for idx in tqdm(idx_number_list):
-        generated_plan = json.load(open(f'{directory}/{set_type}/generated_plan_{idx}.json'))
-        if generated_plan[-1][f'{model_name}{suffix}_{mode}_results'] and generated_plan[-1][f'{model_name}{suffix}_{mode}_results'] != "":
-            prompt = prefix + "Text:\n"+generated_plan[-1][f'{model_name}{suffix}_{mode}_results']+"\nJSON:\n"
+        plan_path = f'{directory}/{set_type}/generated_plan_{idx}.json'
+        if not os.path.exists(plan_path):
+            prompt_list.append("")
+            continue
+        generated_plan = json.load(open(plan_path))
+        results_key = f'{model_name}{suffix}_{mode}_results'
+        entry = generated_plan[-1]
+        if results_key not in entry:
+            candidates = [
+                key for key in entry.keys()
+                if key.endswith(f'{suffix}_{mode}_results')
+            ]
+            if not candidates:
+                candidates = [key for key in entry.keys() if key.endswith(f'_{mode}_results')]
+            if candidates:
+                results_key = candidates[0]
+        if entry.get(results_key):
+            prompt = prefix + "Text:\n"+entry[results_key]+"\nJSON:\n"
         else:
             prompt = ""
         prompt_list.append(prompt)
